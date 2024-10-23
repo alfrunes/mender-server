@@ -1,4 +1,6 @@
 name: mender
+include:
+  - path: compose/docker-compose.seaweedfs.yml
 services:
   create-artifact-worker:
     build:
@@ -23,7 +25,7 @@ services:
     depends_on:
       mongo:
         condition: service_started
-      s3fs:
+      s3:
         condition: service_healthy
     environment:
       DEPLOYMENTS_PRESIGN_URL_HOSTNAME: "docker.mender.io"
@@ -32,7 +34,7 @@ services:
       DEPLOYMENTS_MENDER_WORKFLOWS: http://workflows:8080
       DEPLOYMENTS_MONGO_URL: "mongodb://mongo"
       DEPLOYMENTS_STORAGE_BUCKET: "mender"
-      DEPLOYMENTS_AWS_URI: "http://s3fs:8333"
+      DEPLOYMENTS_AWS_URI: "http://s3:8333"
       DEPLOYMENTS_AWS_EXTERNAL_URI: "https://s3.docker.mender.io"
       DEPLOYMENTS_AWS_AUTH_KEY: "${MENDER_ACCESS_KEY_ID:-mender}"
       DEPLOYMENTS_AWS_AUTH_SECRET: "${MENDER_SECRET_ACCESS_KEY:-thisisnotsecure}"
@@ -355,37 +357,6 @@ services:
       default:
         aliases: [mender-nats]
 
-  s3fs:
-    image: chrislusf/seaweedfs
-    configs:
-      - source: s3_conf
-        target: /etc/seaweedfs/s3.conf
-    volumes:
-      - s3:/data
-    labels:
-      traefik.enable: "true"
-      traefik.http.routers.s3fs.priority: "99999"
-      traefik.http.routers.s3fs.rule: PathPrefix(`/mender`)
-      traefik.http.services.s3fs.loadBalancer.server.port: "8333"
-    command:
-      - server
-      - -dir=/data
-      - -master.electionTimeout=1s
-      - -master.heartbeatInterval=250ms
-      - -master.raftHashicorp=true
-      - -s3
-      - -s3.config=/etc/seaweedfs/s3.conf
-    healthcheck:
-      test:
-        - CMD
-        - "/usr/bin/nc"
-        - "-z"
-        - "127.0.0.1"
-        - "8333"
-      start_period: 1m
-      start_interval: 1s
-      retries: 10
-
   client:
     image: mendersoftware/mender-client-docker-addons:mender-master
     scale: 0
@@ -406,29 +377,6 @@ configs:
         "UpdatePollIntervalSeconds": 5,
         "TenantToken": "${TENANT_TOKEN:-}"
       }
-  s3_conf:
-    content: |
-      {
-        "identities": [
-          {
-            "name": "mender",
-            "credentials": [
-              {
-                "accessKey": "${MENDER_ACCESS_KEY_ID:-mender}",
-                "secretKey": "${MENDER_SECRET_ACCESS_KEY:-thisisnotsecure}"
-              }
-            ],
-            "actions": [
-              "Admin:mender",
-              "Read:mender",
-              "Write:mender",
-              "List:mender",
-              "Tagging:mender"
-            ]
-          }
-        ]
-      }
 
 volumes:
-  s3: {}
   mongo: {}

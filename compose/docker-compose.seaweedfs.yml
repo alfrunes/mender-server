@@ -1,0 +1,99 @@
+version: '3.9'
+
+services:
+
+  s3-master:
+    image: chrislusf/seaweedfs
+    ports:
+      - 9333:9333
+      - 19333:19333
+      - 9324:9324
+    command:
+     - master
+     - -mdir=/data
+     - -ip=s3-master
+     - -ip.bind=0.0.0.0
+     - -electionTimeout=1s
+     - -heartbeatInterval=250ms
+     - -raftHashicorp=true
+    volumes:
+      - s3:/data
+
+  s3-volume:
+    image: chrislusf/seaweedfs
+    ports:
+      - 8080:8080
+      - 18080:18080
+      - 9325:9325
+    command: 'volume -dir=/data -preStopSeconds=2 -mserver="s3-master:9333" -ip.bind=0.0.0.0 -port=8080  -metricsPort=9325'
+    depends_on:
+      - s3-master
+    volumes:
+      - s3:/data
+
+  s3-filer:
+    image: chrislusf/seaweedfs
+    ports:
+      - 8888:8888
+      - 18888:18888
+      - 9326:9326
+    command: 'filer -master="s3-master:9333" -ip.bind=0.0.0.0 -metricsPort=9326'
+    tty: true
+    stdin_open: true
+    depends_on:
+      - s3-master
+      - s3-volume
+    volumes:
+      - s3:/data
+
+  s3:
+    image: chrislusf/seaweedfs
+    ports:
+      - 8333:8333
+      - 9327:9327
+    command: 's3 -config=/etc/seaweedfs/s3.conf -filer="s3-filer:8888" -ip.bind=0.0.0.0 -metricsPort=9327'
+    configs:
+      - source: s3-conf
+        target: /etc/seaweedfs/s3.conf
+    depends_on:
+      - s3-master
+      - s3-volume
+      - s3-filer
+    healthcheck:
+      test:
+        - CMD
+        - "/usr/bin/nc"
+        - "-z"
+        - "127.0.0.1"
+        - "8333"
+      start_period: 1m
+      start_interval: 1s
+      retries: 10
+    volumes:
+      - s3:/data
+
+configs:
+  s3-conf:
+    content: |
+      {
+        "identities": [
+          {
+            "name": "mender",
+            "credentials": [
+              {
+                "accessKey": "${MENDER_ACCESS_KEY_ID:-mender}",
+                "secretKey": "${MENDER_SECRET_ACCESS_KEY:-thisisnotsecure}"
+              }
+            ],
+            "actions": [
+              "Admin:mender",
+              "Read:mender",
+              "Write:mender",
+              "List:mender",
+              "Tagging:mender"
+            ]
+          }
+        ]
+      }
+volumes:
+  s3: {}
