@@ -191,23 +191,13 @@ services:
     labels:
       traefik.enable: "true"
       traefik.http.services.inventory.loadBalancer.server.port: "8080"
-      traefik.http.routers.inventoryDevV1.middlewares: >-
-        devStack@file,inventoryV1-replacepathregex@file
-      traefik.http.routers.inventoryDevV1.rule: >-
-        PathRegexp(`/api/devices/v1/inventory`)
-      traefik.http.routers.inventoryDevV1.service: inventory
-      traefik.http.routers.inventoryMgmtV1.middlewares: >-
-        mgmtStack@file,inventoryMgmtV1-replacepathregex@file
-      traefik.http.routers.inventoryMgmtV1.rule: >-
-        PathRegexp(`/api/management/v1/inventory`)
-      traefik.http.routers.inventoryMgmtV1.service: inventory
       traefik.http.routers.inventoryDev.middlewares: "devStack@file"
       traefik.http.routers.inventoryDev.rule: >-
-        PathRegexp(`/api/devices/v[2-9]/inventory`)
+        PathRegexp(`/api/devices/v[1-9]/inventory`)
       traefik.http.routers.inventoryDev.service: inventory
       traefik.http.routers.inventoryMgmt.middlewares: "mgmtStack@file"
       traefik.http.routers.inventoryMgmt.rule: >-
-        PathRegexp(`/api/management/v[2-9]/inventory`)
+        PathRegexp(`/api/management/v[1-9]/inventory`)
       traefik.http.routers.inventoryMgmt.service: inventory
 
     networks:
