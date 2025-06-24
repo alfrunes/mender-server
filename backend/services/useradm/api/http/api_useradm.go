@@ -16,6 +16,7 @@ package http
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -26,6 +27,7 @@ import (
 	"github.com/mendersoftware/mender-server/pkg/accesslog"
 	"github.com/mendersoftware/mender-server/pkg/identity"
 	"github.com/mendersoftware/mender-server/pkg/log"
+	"github.com/mendersoftware/mender-server/pkg/rate/httpmux"
 	"github.com/mendersoftware/mender-server/pkg/requestid"
 	"github.com/mendersoftware/mender-server/pkg/requestlog"
 	"github.com/mendersoftware/mender-server/pkg/rest_utils"
@@ -85,6 +87,8 @@ type Config struct {
 	TokenMaxExpSeconds int
 
 	JWTFallback jwt.Handler
+
+	Ratelimiter *httpmux.RateMux
 }
 
 // return an ApiHandler for user administration and authentiacation app
@@ -276,10 +280,38 @@ func (u *UserAdmApiHandlers) AuthLogoutHandler(w rest.ResponseWriter, r *rest.Re
 	w.WriteHeader(http.StatusAccepted)
 }
 
+type responseWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *responseWriter) WriteHeader(code int) {
+	w.status = code
+	w.ResponseWriter.WriteHeader(code)
+}
+
 func (u *UserAdmApiHandlers) AuthVerifyHandler(w rest.ResponseWriter, r *rest.Request) {
 	ctx := r.Context()
-
 	l := log.FromContext(ctx)
+
+	if u.config.Ratelimiter != nil {
+		// Shallow copy of http.Request but applying X-Forwarded- headers
+		rateRequest := new(http.Request)
+		*rateRequest = *r.Request
+		r.URL = new(url.URL)
+		*r.URL = *r.Request.URL
+		rateRequest.Method = r.Header.Get("X-Forwarded-Method")
+		rateRequest.URL.Path = r.Header.Get("X-Forwarded-Uri")
+		rateRequest.URL.RawPath = ""
+		rateRequest.RequestURI = rateRequest.URL.Path
+		ww := &responseWriter{ResponseWriter: w.(http.ResponseWriter)}
+		u.config.Ratelimiter.ServeHTTP(ww, rateRequest)
+		if ww.status > 0 {
+			// Already responded
+			l.Errorf("rate limiter responded with status: %d", ww.status)
+			return
+		}
+	}
 
 	// note that the request has passed through authz - the token is valid
 	token := authz.GetRequestToken(r.Env)

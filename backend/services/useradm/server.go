@@ -15,6 +15,8 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
+	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
@@ -27,7 +29,11 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/mendersoftware/mender-server/pkg/config"
+	"github.com/mendersoftware/mender-server/pkg/identity"
 	"github.com/mendersoftware/mender-server/pkg/log"
+	"github.com/mendersoftware/mender-server/pkg/rate"
+	"github.com/mendersoftware/mender-server/pkg/rate/httpmux"
+	"github.com/mendersoftware/mender-server/pkg/redis"
 
 	api_http "github.com/mendersoftware/mender-server/services/useradm/api/http"
 	"github.com/mendersoftware/mender-server/services/useradm/client/tenant"
@@ -147,10 +153,25 @@ func RunServer(c config.Reader) error {
 		ua = ua.WithTenantVerification(tc)
 	}
 
+	var rateLimiter *httpmux.RateMux
+	redisConnStr := c.GetString(SettingRedisConnectionString)
+	if redisConnStr != "" {
+		l.Infof("setting up redis cache")
+		client, err := redis.ClientFromConnectionString(context.Background(), redisConnStr)
+		if err != nil {
+			return err
+		}
+		rateLimiter, err = setupRateLimits(client, c)
+		if err != nil {
+			return fmt.Errorf("error configuring rate limits: %w", err)
+		}
+	}
+
 	useradmapi := api_http.NewUserAdmApiHandlers(ua, db, jwtHandlers,
 		api_http.Config{
 			TokenMaxExpSeconds: c.GetInt(SettingTokenMaxExpirationSeconds),
 			JWTFallback:        jwtFallbackHandler,
+			Ratelimiter:        rateLimiter,
 		})
 
 	handler, err := useradmapi.Build(authorizer)
@@ -219,4 +240,42 @@ func addPrivateKeys(
 		}
 	}
 	return handlers, nil
+}
+
+func rateLimitsFromParams(r redis.Client, prefix string, params RatelimitOverride) rate.Limiter {
+	group := params.Group
+	if group == "" {
+		// Convert APIPattern to base64 to ensure we're able to encode the key.
+		group = base64.RawURLEncoding.
+			EncodeToString([]byte(params.APIPattern))
+	}
+	overrideLimiter := redis.NewFixedWindowRateLimiter(r, prefix, params.Interval,
+		func(ctx context.Context) (uint64, string, error) {
+			eventID := group
+			id := identity.FromContext(ctx)
+			if id != nil {
+				eventID = fmt.Sprintf("%s:%s:%s", eventID, id.Tenant, id.Subject)
+			}
+			return uint64(params.Tokens), eventID, nil
+		},
+	)
+	return overrideLimiter
+}
+
+func setupRateLimits(r redis.Client, c config.Reader) (*httpmux.RateMux, error) {
+	lims, err := LoadRatelimits(c)
+	if err != nil {
+		return nil, err
+	}
+	log.NewEmpty().Debugf("loaded rate limit config: %v", lims)
+	redisPrefix := c.GetString(SettingRedisKeyPrefix)
+	mux := httpmux.NewRateMux()
+	mux.AddPattern("/", rateLimitsFromParams(r, redisPrefix, RatelimitOverride{
+		APIPattern:      "/",
+		RatelimitParams: lims.Default,
+	}))
+	for _, override := range lims.Override {
+		mux.AddPattern(override.APIPattern, rateLimitsFromParams(r, redisPrefix, override))
+	}
+	return mux, nil
 }

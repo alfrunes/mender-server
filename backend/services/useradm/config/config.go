@@ -15,6 +15,8 @@
 package config
 
 import (
+	"time"
+
 	"github.com/mendersoftware/mender-server/pkg/config"
 )
 
@@ -54,6 +56,17 @@ const (
 	SettingDbUsername = "mongo_username"
 	SettingDbPassword = "mongo_password"
 
+	SettingRedisConnectionString        = "redis_connection_string"
+	SettingRedisConnectionStringDefault = ""
+
+	SettingRedisKeyPrefix        = "redis_key_prefix"
+	SettingRedisKeyPrefixDefault = "useradm:v1"
+
+	SettingRedisLimitsExpSec        = "redis_limits_expire_sec"
+	SettingRedisLimitsExpSecDefault = "1800"
+
+	SettingRedisAddr = "redis_addr"
+
 	SettingLimitSessionsPerUser        = "limit_sessions_per_user"
 	SettingLimitSessionsPerUserDefault = 10
 
@@ -68,6 +81,14 @@ const (
 
 	SettingPlanDefinitions        = "plan_definitions_path"
 	SettingPlanDefinitionsDefault = "/etc/useradm/plans.yaml"
+
+	SettingRatelimits                       = "ratelimits"
+	SettingRatelimitsDevicesEnable          = SettingRatelimits + ".enable"
+	SettingRatelimitsDefaultInterval        = SettingRatelimits + ".default.interval"
+	SettingRatelimitsDefaultIntervalDefault = time.Minute
+	SettingRatelimitsDefaultTokens          = SettingRatelimits + ".default.tokens"
+	SettingRatelimitsDefaultTokensDefault   = 300
+	SettingRatelimitsOverrides              = SettingRatelimits + ".overrides"
 )
 
 var (
@@ -84,6 +105,9 @@ var (
 		{Key: SettingTenantAdmAddr, Value: SettingTenantAdmAddrDefault},
 		{Key: SettingDbSSL, Value: SettingDbSSLDefault},
 		{Key: SettingDbSSLSkipVerify, Value: SettingDbSSLSkipVerifyDefault},
+		{Key: SettingRedisConnectionString, Value: SettingRedisConnectionStringDefault},
+		{Key: SettingRedisKeyPrefix, Value: SettingRedisKeyPrefixDefault},
+		{Key: SettingRedisLimitsExpSec, Value: SettingRedisLimitsExpSecDefault},
 		{Key: SettingLimitSessionsPerUser, Value: SettingLimitSessionsPerUserDefault},
 		{Key: SettingLimitTokensPerUser, Value: SettingLimitTokensPerUserDefault},
 		{Key: SettingTokenLastUsedUpdateFreqMinutes,
@@ -92,5 +116,7 @@ var (
 			Value: SettingTokenMaxExpirationSecondsDefault},
 		{Key: SettingPlanDefinitions,
 			Value: SettingPlanDefinitionsDefault},
+		{Key: SettingRatelimitsDefaultInterval, Value: SettingRatelimitsDefaultIntervalDefault},
+		{Key: SettingRatelimitsDefaultTokens, Value: SettingRatelimitsDefaultTokensDefault},
 	}
 )

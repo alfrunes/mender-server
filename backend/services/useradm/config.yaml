@@ -1,7 +1,6 @@
 # API server listen address
 # Defauls to: ":8080" which will listen on all avalable interfaces.
 listen: :8080
-
 # Private key path - used for JWT signing
 # Defaults to: /etc/useradm/rsa/private.pem
 # Overwrite with environment variable: USERADM_SERVER_PRIV_KEY_PATH
@@ -64,3 +63,24 @@ listen: :8080
 # Path to the file containing plan definitions
 # Defaults to: "/etc/useradm-enterprise/plans.yaml"
 # plan_definitions_path: "/etc/useradm-enterprise/plans.yaml"
+
+# Ratelimit configuration:
+# ratelimits:
+#   enable: true
+#   # defaults specifies the fallback parameters
+#   defaults:
+#     tokens: 10   # tokens number of requests per
+#     interval: 1s # interval
+#   # Overrides allows overriding parameters based on API pattern.
+#   # The group specifies which rate limiting group the rule matches.
+#   # The pattern matching uses Go http.ServeMux:
+#   # https://pkg.go.dev/net/http@go1.24.4#ServeMux
+#   overrides:
+#     - group: slow
+#       pattern: "/very/expensive/apis/"
+#       interval: 30s
+#       tokens: 1
+#     - group: fast
+#       pattern: "GET /fast/apis/"
+#       interval: 100ms
+#       tokens: 100
