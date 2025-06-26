@@ -22,23 +22,38 @@ import (
 )
 
 type RatelimitConfig struct {
-	Default  RatelimitParams     `json:"default"`
-	Override []RatelimitOverride `json:"overrides"`
+	ParamGroups map[string]RatelimitParam `json:"parameter_groups"`
+	Rules       []Rules                   `json:"rules"`
 }
 
-type RatelimitParams struct {
-	Group    string        `json:"group"`
+type RatelimitParam struct {
 	Tokens   int           `json:"tokens"`
 	Interval time.Duration `json:"interval"`
 }
 
-type RatelimitOverride struct {
+type Rules struct {
 	// APIPattern matches method and path of the incoming request using pattern
 	// from Go standard library ServeMux.
 	// https://pkg.go.dev/net/http#hdr-Patterns-ServeMux
 	APIPattern string `mapstructure:"pattern" json:"pattern"`
-	RatelimitParams
+	ParamGroup string `mapstructure:"group" json:"group"`
 }
+
+// ratelimits:
+//   parameter_groups:
+//     default:
+//     	tokens: 100
+//     	interval: 60s
+//     	group_by: {{ .Identity.Tenant }}:{{ .Identity.Subject }}
+//     billing_upgrade:
+//     	tokens: 2
+//     	interval: 24h
+//     	group_by: {{ .Identity.Tenant }}
+//		rules:
+//			- pattern: /
+//				group: default
+//			- pattern: POST /api/management/v2/tenantadm/billing/subscriptions
+//				group: billing_upgrade
 
 func LoadRatelimits(c config.Reader) (*RatelimitConfig, error) {
 	var ratelimitConfig RatelimitConfig
