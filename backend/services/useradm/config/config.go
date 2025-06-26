@@ -15,8 +15,6 @@
 package config
 
 import (
-	"time"
-
 	"github.com/mendersoftware/mender-server/pkg/config"
 )
 
@@ -39,7 +37,7 @@ const (
 	SettingJWTIssuerDefault = "mender.useradm"
 
 	SettingJWTExpirationTimeout        = "jwt_exp_timeout"
-	SettingJWTExpirationTimeoutDefault = "604800" //one week
+	SettingJWTExpirationTimeoutDefault = "604800" // one week
 
 	SettingDb        = "mongo"
 	SettingDbDefault = "mongo-useradm"
@@ -83,40 +81,45 @@ const (
 	SettingPlanDefinitionsDefault = "/etc/useradm/plans.yaml"
 
 	SettingRatelimits                       = "ratelimits"
-	SettingRatelimitsDevicesEnable          = SettingRatelimits + ".enable"
-	SettingRatelimitsDefaultInterval        = SettingRatelimits + ".default.interval"
-	SettingRatelimitsDefaultIntervalDefault = time.Minute
-	SettingRatelimitsDefaultTokens          = SettingRatelimits + ".default.tokens"
-	SettingRatelimitsDefaultTokensDefault   = 300
-	SettingRatelimitsOverrides              = SettingRatelimits + ".overrides"
+	SettingRatelimitsEnable                 = SettingRatelimits + ".enable"
+	SettingRatelimitsDefault                = SettingRatelimits + ".default"
+	SettingRatelimitsDefaultQuota           = SettingRatelimitsDefault + ".quota"
+	SettingRatelimitsDefaultInterval        = SettingRatelimitsDefault + ".interval"
+	SettingRatelimitsDefaultEventExpression = SettingRatelimitsDefault + ".event_expression"
+	SettingRatelimitsGroups                 = SettingRatelimits + ".groups"
+	SettingRatelimitsMatch                  = SettingRatelimits + ".match"
 )
 
-var (
-	ConfigDefaults = []config.Default{
-		{Key: SettingListen, Value: SettingListenDefault},
-		{Key: SettingMiddleware, Value: SettingMiddlewareDefault},
-		{Key: SettingServerPrivKeyPath, Value: SettingServerPrivKeyPathDefault},
-		{Key: SettingServerPrivKeyFileNamePattern,
-			Value: SettingServerPrivKeyFileNamePatternDefault},
-		{Key: SettingServerFallbackPrivKeyPath, Value: SettingServerFallbackPrivKeyPathDefault},
-		{Key: SettingJWTIssuer, Value: SettingJWTIssuerDefault},
-		{Key: SettingJWTExpirationTimeout, Value: SettingJWTExpirationTimeoutDefault},
-		{Key: SettingDb, Value: SettingDbDefault},
-		{Key: SettingTenantAdmAddr, Value: SettingTenantAdmAddrDefault},
-		{Key: SettingDbSSL, Value: SettingDbSSLDefault},
-		{Key: SettingDbSSLSkipVerify, Value: SettingDbSSLSkipVerifyDefault},
-		{Key: SettingRedisConnectionString, Value: SettingRedisConnectionStringDefault},
-		{Key: SettingRedisKeyPrefix, Value: SettingRedisKeyPrefixDefault},
-		{Key: SettingRedisLimitsExpSec, Value: SettingRedisLimitsExpSecDefault},
-		{Key: SettingLimitSessionsPerUser, Value: SettingLimitSessionsPerUserDefault},
-		{Key: SettingLimitTokensPerUser, Value: SettingLimitTokensPerUserDefault},
-		{Key: SettingTokenLastUsedUpdateFreqMinutes,
-			Value: SettingTokenLastUsedUpdateFreqMinutesDefault},
-		{Key: SettingTokenMaxExpirationSeconds,
-			Value: SettingTokenMaxExpirationSecondsDefault},
-		{Key: SettingPlanDefinitions,
-			Value: SettingPlanDefinitionsDefault},
-		{Key: SettingRatelimitsDefaultInterval, Value: SettingRatelimitsDefaultIntervalDefault},
-		{Key: SettingRatelimitsDefaultTokens, Value: SettingRatelimitsDefaultTokensDefault},
-	}
-)
+var ConfigDefaults = []config.Default{
+	{Key: SettingListen, Value: SettingListenDefault},
+	{Key: SettingMiddleware, Value: SettingMiddlewareDefault},
+	{Key: SettingServerPrivKeyPath, Value: SettingServerPrivKeyPathDefault},
+	{
+		Key:   SettingServerPrivKeyFileNamePattern,
+		Value: SettingServerPrivKeyFileNamePatternDefault,
+	},
+	{Key: SettingServerFallbackPrivKeyPath, Value: SettingServerFallbackPrivKeyPathDefault},
+	{Key: SettingJWTIssuer, Value: SettingJWTIssuerDefault},
+	{Key: SettingJWTExpirationTimeout, Value: SettingJWTExpirationTimeoutDefault},
+	{Key: SettingDb, Value: SettingDbDefault},
+	{Key: SettingTenantAdmAddr, Value: SettingTenantAdmAddrDefault},
+	{Key: SettingDbSSL, Value: SettingDbSSLDefault},
+	{Key: SettingDbSSLSkipVerify, Value: SettingDbSSLSkipVerifyDefault},
+	{Key: SettingRedisConnectionString, Value: SettingRedisConnectionStringDefault},
+	{Key: SettingRedisKeyPrefix, Value: SettingRedisKeyPrefixDefault},
+	{Key: SettingRedisLimitsExpSec, Value: SettingRedisLimitsExpSecDefault},
+	{Key: SettingLimitSessionsPerUser, Value: SettingLimitSessionsPerUserDefault},
+	{Key: SettingLimitTokensPerUser, Value: SettingLimitTokensPerUserDefault},
+	{
+		Key:   SettingTokenLastUsedUpdateFreqMinutes,
+		Value: SettingTokenLastUsedUpdateFreqMinutesDefault,
+	},
+	{
+		Key:   SettingTokenMaxExpirationSeconds,
+		Value: SettingTokenMaxExpirationSecondsDefault,
+	},
+	{
+		Key:   SettingPlanDefinitions,
+		Value: SettingPlanDefinitionsDefault,
+	},
+}

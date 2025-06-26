@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"text/template"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -15,6 +17,28 @@ import (
 )
 
 var ErrTooManyRequests = errors.New("too many requests")
+
+type Template template.Template
+
+func (tmpl *Template) UnmarshalText(b []byte) error {
+	_, err := (*template.Template)(tmpl).Parse(string(b))
+	return err
+}
+
+type RatelimitParam struct {
+	GroupName string            `json:"group"`
+	Quota     int               `json:"quota"`
+	Interval  time.Duration     `json:"interval"`
+	GroupBy   template.Template `json:"group_template"`
+	Match     []MatchRule       `json:"match"`
+}
+
+type MatchRule struct {
+	// APIPattern matches method and path of the incoming request using pattern
+	// from Go standard library ServeMux.
+	// https://pkg.go.dev/net/http#hdr-Patterns-ServeMux
+	APIPattern string `json:"pattern"`
+}
 
 type RateMux struct {
 	mux *http.ServeMux

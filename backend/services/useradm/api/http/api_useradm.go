@@ -27,7 +27,7 @@ import (
 	"github.com/mendersoftware/mender-server/pkg/accesslog"
 	"github.com/mendersoftware/mender-server/pkg/identity"
 	"github.com/mendersoftware/mender-server/pkg/log"
-	"github.com/mendersoftware/mender-server/pkg/rate/httpmux"
+	"github.com/mendersoftware/mender-server/pkg/rate"
 	"github.com/mendersoftware/mender-server/pkg/requestid"
 	"github.com/mendersoftware/mender-server/pkg/requestlog"
 	"github.com/mendersoftware/mender-server/pkg/rest_utils"
@@ -88,7 +88,7 @@ type Config struct {
 
 	JWTFallback jwt.Handler
 
-	Ratelimiter *httpmux.RateMux
+	Ratelimiter *rate.HTTPLimiter
 }
 
 // return an ApiHandler for user administration and authentiacation app
@@ -217,7 +217,7 @@ func (u *UserAdmApiHandlers) AuthLoginHandler(w rest.ResponseWriter, r *rest.Req
 
 	l := log.FromContext(ctx)
 
-	//parse auth header
+	// parse auth header
 	user, pass, ok := r.BasicAuth()
 	if !ok {
 		rest_utils.RestErrWithLog(w, r, l,
@@ -357,7 +357,6 @@ func (u *UserAdmApiHandlers) CreateTenantUserHandler(w rest.ResponseWriter, r *r
 	}
 
 	w.WriteHeader(http.StatusCreated)
-
 }
 
 func (u *UserAdmApiHandlers) AddUserHandler(w rest.ResponseWriter, r *rest.Request) {
@@ -387,7 +386,6 @@ func (u *UserAdmApiHandlers) AddUserHandler(w rest.ResponseWriter, r *rest.Reque
 
 	w.Header().Add("Location", "users/"+string(user.ID))
 	w.WriteHeader(http.StatusCreated)
-
 }
 
 func (u *UserAdmApiHandlers) GetUsersHandler(w rest.ResponseWriter, r *rest.Request) {
@@ -536,7 +534,7 @@ func (u *UserAdmApiHandlers) DeleteUserHandler(w rest.ResponseWriter, r *rest.Re
 func parseUser(r *rest.Request) (*model.User, error) {
 	user := model.User{}
 
-	//decode body
+	// decode body
 	err := r.DecodeJsonPayload(&user)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to decode request body")
@@ -552,7 +550,7 @@ func parseUser(r *rest.Request) (*model.User, error) {
 func parseUserInternal(r *rest.Request) (*model.UserInternal, error) {
 	user := model.UserInternal{}
 
-	//decode body
+	// decode body
 	err := r.DecodeJsonPayload(&user)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to decode request body")
@@ -568,7 +566,7 @@ func parseUserInternal(r *rest.Request) (*model.UserInternal, error) {
 func parseUserUpdate(r *rest.Request) (*model.UserUpdate, error) {
 	userUpdate := model.UserUpdate{}
 
-	//decode body
+	// decode body
 	err := r.DecodeJsonPayload(&userUpdate)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to decode request body")
@@ -625,7 +623,6 @@ func getTenantContext(ctx context.Context, tenantId string) context.Context {
 }
 
 func (u *UserAdmApiHandlers) DeleteTokensHandler(w rest.ResponseWriter, r *rest.Request) {
-
 	ctx := r.Context()
 
 	l := log.FromContext(ctx)
