@@ -24,6 +24,7 @@ import (
 	"github.com/pkg/errors"
 
 	"github.com/mendersoftware/mender-server/pkg/identity"
+	"github.com/mendersoftware/mender-server/pkg/log"
 	"github.com/mendersoftware/mender-server/pkg/rest.utils"
 
 	"github.com/mendersoftware/mender-server/services/useradm/authz"
@@ -225,6 +226,13 @@ func (u *UserAdmApiHandlers) AuthLogoutHandler(c *gin.Context) {
 
 func (u *UserAdmApiHandlers) AuthVerifyHandler(c *gin.Context) {
 	ctx := c.Request.Context()
+	// HACK: This overwrites the logrus.Entry in the context for all
+	// successive log calls.
+	logger := log.FromContext(ctx)
+	logger.Entry = logger.WithField(
+		"x-forwarded-uri",
+		c.GetHeader("X-Forwarded-uri"),
+	)
 
 	// note that the request has passed through authz - the token is valid
 	token := u.authTokenExtractor(c)
