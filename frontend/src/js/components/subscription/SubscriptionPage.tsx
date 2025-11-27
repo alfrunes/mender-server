@@ -402,10 +402,16 @@ export const SubscriptionPage = () => {
 
   //Fetch Billing profile & subscription
   useEffect(() => {
+    dispatch(getUserBilling()).
+      catch(error => {
+        if (isTrial && error.message && error.message.includes('404')) {
+          return;
+        }
+        throw error;
+      });
     if (isTrial) {
       return;
     }
-    dispatch(getUserBilling());
     dispatch(getCurrentCard());
     //We need to handle special enterprise-like agreements
     dispatch(getUserSubscription())
