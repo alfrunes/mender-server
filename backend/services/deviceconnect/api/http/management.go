@@ -409,7 +409,7 @@ Loop:
 			}
 		case <-ctx.Done():
 			break Loop
-		case err := <-errChan:
+		case err = <-errChan:
 			return err
 		}
 	}
