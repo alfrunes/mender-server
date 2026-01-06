@@ -146,9 +146,7 @@ func (h ManagementController) Connect(c *gin.Context) {
 
 	idata := identity.FromContext(ctx)
 	if !idata.IsUser {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": ErrMissingUserAuthentication.Error(),
-		})
+		rest.RenderError(c, http.StatusBadRequest, ErrMissingUserAuthentication)
 		return
 	}
 	ctx, cancel := context.WithCancel(ctx)
@@ -170,20 +168,13 @@ func (h ManagementController) Connect(c *gin.Context) {
 	// Prepare the user session
 	err := h.app.PrepareUserSession(ctx, session)
 	if err == app.ErrDeviceNotFound || err == app.ErrDeviceNotConnected {
-		c.JSON(http.StatusNotFound, gin.H{
-			"error": err.Error(),
-		})
+		rest.RenderError(c, http.StatusNotFound, err)
 		return
 	} else if _, ok := errors.Cause(err).(validation.Errors); ok {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": err.Error(),
-		})
+		rest.RenderError(c, http.StatusBadRequest, err)
 		return
 	} else if err != nil {
-		l.Error(err)
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": err.Error(),
-		})
+		rest.RenderInternalError(c, err)
 		return
 	}
 	defer func() {
@@ -196,10 +187,10 @@ func (h ManagementController) Connect(c *gin.Context) {
 	deviceChan := make(chan *natsio.Msg, channelSize)
 	sub, err := h.nats.ChanSubscribe(session.Subject(tenantID), deviceChan)
 	if err != nil {
-		l.Error(err)
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "failed to establish internal device session",
-		})
+		rest.RenderErrorWithMessage(c,
+			http.StatusInternalServerError,
+			err,
+			"failed to establish internal device session")
 		return
 	}
 	//nolint:errcheck
