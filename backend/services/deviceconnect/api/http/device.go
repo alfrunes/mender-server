@@ -31,6 +31,7 @@ import (
 	"github.com/mendersoftware/mender-server/pkg/identity"
 	"github.com/mendersoftware/mender-server/pkg/log"
 	"github.com/mendersoftware/mender-server/pkg/rest.utils"
+	"github.com/mendersoftware/mender-server/pkg/stream"
 	"github.com/mendersoftware/mender-server/pkg/ws"
 	"github.com/mendersoftware/mender-server/pkg/ws/shell"
 
@@ -136,19 +137,17 @@ func (h DeviceController) Connect(c *gin.Context) {
 	}
 
 	msgChan := make(chan *natsio.Msg, channelSize)
-	sub, err := h.nats.ChanSubscribe(
-		model.GetDeviceSubject(idata.Tenant, idata.Subject),
-		msgChan,
-	)
+
+	listener, err := h.nats.Listen(idata.Subject)
 	if err != nil {
-		l.Error(err)
+		_ = c.Error(err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "failed to allocate internal device channel",
 		})
 		return
 	}
 	//nolint:errcheck
-	defer sub.Unsubscribe()
+	defer listener.Close(ctx)
 
 	upgrader := websocket.Upgrader{
 		Subprotocols: []string{"protomsg/msgpack"},
@@ -182,8 +181,8 @@ func (h DeviceController) Connect(c *gin.Context) {
 	// websocketWriter is responsible for closing the websocket
 	errChan := make(chan error)
 	//nolint:errcheck
-	go h.ConnectServeWS(ctxWithCancel, conn, errChan)
-	err = h.connectWSWriter(ctxWithCancel, conn, msgChan, errChan)
+	// go h.ConnectServeWS(ctxWithCancel, conn, errChan)
+	err = h.connectWSWriter(ctxWithCancel, conn, listener, msgChan, errChan)
 	if err != nil {
 		_ = c.Error(err)
 	}
@@ -196,8 +195,9 @@ func (h DeviceController) Connect(c *gin.Context) {
 func (h DeviceController) connectWSWriter(
 	ctx context.Context,
 	conn *websocket.Conn,
+	listener stream.Listener,
 	msgChan <-chan *natsio.Msg,
-	errChan <-chan error,
+	errChan chan error,
 ) (err error) {
 	l := log.FromContext(ctx)
 	defer l.SimpleRecovery(
@@ -246,6 +246,59 @@ func (h DeviceController) connectWSWriter(
 			time.Now().Add(writeWait),
 		)
 	})
+	acceptErr := make(chan error)
+	conns := make(map[string]stream.Conn)
+	go func() {
+		for {
+			s, err := listener.Accept(ctx)
+			if err != nil {
+				acceptErr <- err
+				return
+			}
+			conns[s.RemoteAddr()] = s
+			go func() {
+				for {
+					data, err := s.Recv(ctx)
+					if err != nil {
+						acceptErr <- err
+						return
+					}
+					ticker.Reset(pingPeriod)
+					err = conn.WriteMessage(websocket.BinaryMessage, data)
+					if err != nil {
+						acceptErr <- err
+						return
+					}
+				}
+			}()
+		}
+	}()
+
+	id := identity.FromContext(ctx)
+	go func() {
+		for {
+			_, data, err := conn.ReadMessage()
+			if err != nil {
+				errChan <- err
+				return
+			}
+			var msg ws.ProtoMsg
+			err = msgpack.Unmarshal(data, &msg)
+			if err != nil {
+				errChan <- err
+				return
+			}
+			sess, ok := conns[id.Tenant+":"+msg.Header.SessionID]
+			if !ok {
+				continue
+			}
+			err = sess.Send(ctx, data)
+			if err != nil {
+				errChan <- err
+				return
+			}
+		}
+	}()
 Loop:
 	for {
 		select {
@@ -255,7 +308,6 @@ Loop:
 				l.Error(err)
 				break Loop
 			}
-			ticker.Reset(pingPeriod)
 		case <-ctx.Done():
 			break Loop
 		case <-ticker.C:
@@ -265,6 +317,8 @@ Loop:
 			}
 		case err := <-errChan:
 			return err
+		case err := <-acceptErr:
+			return err
 		}
 	}
 	return err
@@ -273,6 +327,7 @@ Loop:
 func (h DeviceController) ConnectServeWS(
 	ctx context.Context,
 	conn *websocket.Conn,
+	s stream.Conn,
 	errChan chan<- error,
 ) (err error) {
 	l := log.FromContext(ctx)
@@ -312,10 +367,7 @@ func (h DeviceController) ConnectServeWS(
 					Body: []byte("device disconnected"),
 				}
 				data, _ := msgpack.Marshal(msg)
-				err = h.nats.Publish(
-					model.GetSessionSubject(id.Tenant, sessionID),
-					data,
-				)
+				err = s.Send(ctx, data)
 			}
 		}
 		// update the device status on websocket closing
@@ -356,10 +408,7 @@ func (h DeviceController) ConnectServeWS(
 			// TODO: Handle protocol violation
 		}
 
-		err = h.nats.Publish(
-			model.GetSessionSubject(id.Tenant, m.Header.SessionID),
-			data,
-		)
+		err = s.Send(ctx, data)
 		if err != nil {
 			return err
 		}

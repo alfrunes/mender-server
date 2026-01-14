@@ -21,14 +21,12 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"strconv"
 	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	validation "github.com/go-ozzo/ozzo-validation/v4"
 	"github.com/gorilla/websocket"
-	natsio "github.com/nats-io/nats.go"
 	"github.com/pkg/errors"
 	"github.com/vmihailenco/msgpack/v5"
 
@@ -36,6 +34,7 @@ import (
 	"github.com/mendersoftware/mender-server/pkg/log"
 	"github.com/mendersoftware/mender-server/pkg/requestid"
 	"github.com/mendersoftware/mender-server/pkg/rest.utils"
+	"github.com/mendersoftware/mender-server/pkg/stream"
 	"github.com/mendersoftware/mender-server/pkg/ws"
 	"github.com/mendersoftware/mender-server/pkg/ws/menderclient"
 	"github.com/mendersoftware/mender-server/pkg/ws/shell"
@@ -193,17 +192,20 @@ func (h ManagementController) Connect(c *gin.Context) {
 		}
 	}()
 
-	deviceChan := make(chan *natsio.Msg, channelSize)
-	sub, err := h.nats.ChanSubscribe(session.Subject(tenantID), deviceChan)
+	s, err := h.nats.Connect(ctx, session.TenantID+":"+session.ID, session.DeviceID)
 	if err != nil {
-		l.Error(err)
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "failed to establish internal device session",
-		})
+		if errors.Is(err, stream.ErrConnectionRefused) {
+			rest.RenderErrorWithMessage(c, http.StatusConflict, err,
+				"failed to connect to device: device disconnected")
+		} else {
+			rest.RenderErrorWithMessage(c, http.StatusInternalServerError, err,
+				"failed to connect to device: internal error",
+			)
+		}
 		return
 	}
 	//nolint:errcheck
-	defer sub.Unsubscribe()
+	defer s.Close(ctx)
 
 	// upgrade get request to websocket protocol
 	conn, err := wsUpgrader.Upgrade(c.Writer, c.Request, nil)
@@ -216,78 +218,11 @@ func (h ManagementController) Connect(c *gin.Context) {
 	conn.SetReadLimit(int64(app.MessageSizeLimit))
 
 	//nolint:errcheck
-	h.ConnectServeWS(c, ctx, conn, session, deviceChan)
+	h.ConnectServeWS(c, ctx, conn, session, s)
 }
 
 func (h ManagementController) Playback(c *gin.Context) {
-	ctx := c.Request.Context()
-	l := log.FromContext(ctx)
-
-	idata := identity.FromContext(ctx)
-	if !idata.IsUser {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": ErrMissingUserAuthentication.Error(),
-		})
-		return
-	}
-
-	tenantID := idata.Tenant
-	userID := idata.Subject
-	sessionID := c.Param(PlaybackSessionIDField)
-	session := &model.Session{
-		TenantID:           tenantID,
-		UserID:             userID,
-		StartTS:            time.Now(),
-		BytesRecordedMutex: &sync.Mutex{},
-	}
-	sleepInterval := c.Param(PlaybackSleepIntervalMsField)
-	sleepMilliseconds := uint(app.DefaultPlaybackSleepIntervalMs)
-	if len(sleepInterval) > 1 {
-		n, err := strconv.ParseUint(sleepInterval, 10, 32)
-		if err != nil {
-			sleepMilliseconds = uint(n)
-		}
-	}
-
-	l.Infof("Playing back the session session_id=%s", sessionID)
-
-	// upgrade get request to websocket protocol
-	conn, err := wsUpgrader.Upgrade(c.Writer, c.Request, nil)
-	if err != nil {
-		err = errors.Wrap(err, "unable to upgrade the request to websocket protocol")
-		l.Error(err)
-		return
-	}
-	conn.SetReadLimit(int64(app.MessageSizeLimit))
-
-	deviceChan := make(chan *natsio.Msg, channelSize)
-	errChan := make(chan error, 1)
-
-	//nolint:errcheck
-	go h.websocketWriter(ctx,
-		conn,
-		session,
-		deviceChan,
-		errChan,
-		bufio.NewWriterSize(io.Discard, app.RecorderBufferSize),
-		bufio.NewWriterSize(io.Discard, app.RecorderBufferSize))
-
-	go func() {
-		defer l.SimpleRecovery(
-			log.NewRecoveryOption().
-				WithChannel(errChan))
-		err = h.app.GetSessionRecording(ctx,
-			sessionID,
-			app.NewPlayback(deviceChan, sleepMilliseconds))
-		if err != nil {
-			err = errors.Wrap(err, "unable to get the session.")
-			errChan <- err
-			return
-		}
-	}()
-	// We need to keep reading in order to keep ping/pong handlers functioning.
-	for ; err == nil; _, _, err = conn.NextReader() {
-	}
+	// TODO
 }
 
 func writerFinalizer(conn *websocket.Conn, e *error, l *log.Logger) {
@@ -324,7 +259,7 @@ func (h ManagementController) websocketWriter(
 	ctx context.Context,
 	conn *websocket.Conn,
 	session *model.Session,
-	deviceChan <-chan *natsio.Msg,
+	s stream.Conn,
 	errChan <-chan error,
 	recorderBuffered *bufio.Writer,
 	controlRecorderBuffered *bufio.Writer,
@@ -361,65 +296,62 @@ Loop:
 	for {
 		var forwardedMsg []byte
 
-		select {
-		case msg := <-deviceChan:
-			mr := &ws.ProtoMsg{}
-			err = msgpack.Unmarshal(msg.Data, mr)
-			if err != nil {
-				return err
-			}
-
-			forwardedMsg = msg.Data
-
-			if mr.Header.Proto == ws.ProtoTypeShell {
-				switch mr.Header.MsgType {
-				case shell.MessageTypeShellCommand:
-
-					if recordedBytes >= app.MessageSizeLimit ||
-						controlBytes >= app.MessageSizeLimit {
-						sessOverLimit = true
-
-						errMsg := h.handleSessLimit(ctx,
-							session,
-							&sessOverLimitHandled,
-						)
-
-						//override original message with shell error
-						if errMsg != nil {
-							forwardedMsg = errMsg
-						}
-					} else {
-						if err = recordSession(ctx,
-							mr,
-							recorderBuffered,
-							controlRecorderBuffered,
-							&recordedBytes,
-							&controlBytes,
-							&lastKeystrokeAt,
-							session,
-						); err != nil {
-							return err
-						}
-					}
-
-				case shell.MessageTypeStopShell:
-					l.Debugf("session logging: recorderBuffered.Flush()"+
-						" at %d on stop shell", recordedBytes)
-					recorderBuffered.Flush()
-				}
-			}
-
-			if !sessOverLimit {
-				err = conn.WriteMessage(websocket.BinaryMessage, forwardedMsg)
-				if err != nil {
-					l.Error(err)
-					break Loop
-				}
-			}
-		case <-ctx.Done():
-			break Loop
-		case err := <-errChan:
+		data, err := s.Recv(ctx)
+		if err != nil {
 			return err
+		}
+		mr := &ws.ProtoMsg{}
+		err = msgpack.Unmarshal(data, mr)
+		if err != nil {
+			return err
+		}
+		mr.Header.SessionID = session.ID
+		forwardedMsg, _ = msgpack.Marshal(mr)
+
+		if mr.Header.Proto == ws.ProtoTypeShell {
+			switch mr.Header.MsgType {
+			case shell.MessageTypeShellCommand:
+
+				if recordedBytes >= app.MessageSizeLimit ||
+					controlBytes >= app.MessageSizeLimit {
+					sessOverLimit = true
+
+					errMsg := h.handleSessLimit(ctx,
+						session,
+						&sessOverLimitHandled,
+					)
+
+					//override original message with shell error
+					if errMsg != nil {
+						forwardedMsg = errMsg
+					}
+				} else {
+					if err = recordSession(ctx,
+						mr,
+						recorderBuffered,
+						controlRecorderBuffered,
+						&recordedBytes,
+						&controlBytes,
+						&lastKeystrokeAt,
+						session,
+					); err != nil {
+						return err
+					}
+				}
+
+			case shell.MessageTypeStopShell:
+				l.Debugf("session logging: recorderBuffered.Flush()"+
+					" at %d on stop shell", recordedBytes)
+				recorderBuffered.Flush()
+			}
+		}
+
+		if !sessOverLimit {
+			err = conn.WriteMessage(websocket.BinaryMessage, forwardedMsg)
+			if err != nil {
+				l.Error(err)
+				break Loop
+			}
 		}
 	}
 	return err
@@ -574,7 +506,7 @@ func (h ManagementController) ConnectServeWS(
 	ctx context.Context,
 	conn *websocket.Conn,
 	sess *model.Session,
-	deviceChan chan *natsio.Msg,
+	s stream.Conn,
 ) (err error) {
 	l := log.FromContext(ctx)
 	id := identity.FromContext(ctx)
@@ -619,13 +551,13 @@ func (h ManagementController) ConnectServeWS(
 
 	errChan := make(chan error)
 	//nolint:errcheck
-	go h.connectServeWSProcessMessages(ctx, conn, sess, errChan,
+	go h.connectServeWSProcessMessages(ctx, conn, s, sess, errChan,
 		&remoteTerminalRunning, controlRecorderBuffered)
 
 	err = h.websocketWriter(ctx,
 		conn,
 		sess,
-		deviceChan,
+		s,
 		errChan,
 		sessionRecorderBuffered,
 		controlRecorderBuffered)
@@ -656,6 +588,7 @@ func (h ManagementController) handleReadErrors(
 func (h ManagementController) connectServeWSProcessMessages(
 	ctx context.Context,
 	conn *websocket.Conn,
+	s stream.Conn,
 	sess *model.Session,
 	errChan chan<- error,
 	remoteTerminalRunning *bool,
@@ -663,7 +596,6 @@ func (h ManagementController) connectServeWSProcessMessages(
 ) {
 	var err error
 	l := log.FromContext(ctx)
-	id := identity.FromContext(ctx)
 	logTerminal := false
 	logPortForward := false
 	defer h.handleReadErrors(ctx, &err, errChan)
@@ -733,7 +665,7 @@ func (h ManagementController) connectServeWSProcessMessages(
 			}
 		}
 
-		err = h.nats.Publish(model.GetDeviceSubject(id.Tenant, sess.DeviceID), data)
+		err = s.Send(ctx, data)
 		if err != nil {
 			return
 		}
