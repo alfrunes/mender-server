@@ -1,4 +1,11 @@
 ---
+## [4.2.0-rc](https://github.com/alfrunes/mender-server/compare/v4.1.0...v4.2.0-rc) (2026-01-16)
+
+
+### Features
+
+* merge branch 'main' into v4.1.0 ([a7addca](https://github.com/alfrunes/mender-server/commit/a7addcad69848b29f43a5155f049b8ebd8fb321f))
+
 ## 4.1.0 - 2026-01-14
 
 
