@@ -159,11 +159,7 @@ type DataStore interface {
 
 	GetDeviceTierStatisticsByStatus(ctx context.Context) (*model.DeviceStatisticsByStatus, error)
 
-	MigrateTenant(ctx context.Context, version string, tenantId string) error
-
 	Migrate(ctx context.Context, version string) error
 
 	WithAutomigrate() DataStore
-
-	Maintenance(ctx context.Context, version string, tenantIDs ...string) error
 }

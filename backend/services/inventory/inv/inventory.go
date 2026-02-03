@@ -28,7 +28,6 @@ import (
 	"github.com/mendersoftware/mender-server/services/inventory/client/workflows"
 	"github.com/mendersoftware/mender-server/services/inventory/model"
 	"github.com/mendersoftware/mender-server/services/inventory/store"
-	"github.com/mendersoftware/mender-server/services/inventory/store/mongo"
 	"github.com/mendersoftware/mender-server/services/inventory/utils"
 )
 
@@ -631,10 +630,6 @@ func (i *inventory) GetDeviceGroup(
 }
 
 func (i *inventory) CreateTenant(ctx context.Context, tenant model.NewTenant) error {
-	if err := i.db.WithAutomigrate().
-		MigrateTenant(ctx, mongo.DbVersion, tenant.ID); err != nil {
-		return errors.Wrapf(err, "failed to apply migrations for tenant %v", tenant.ID)
-	}
 	return nil
 }
 
