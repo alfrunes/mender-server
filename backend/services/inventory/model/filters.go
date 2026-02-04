@@ -30,7 +30,7 @@ var validScopes = []string{"system", "identity", "inventory", "monitor", "tags"}
 type SearchParams struct {
 	Page       int               `json:"page"`
 	PerPage    int               `json:"per_page"`
-	Filters    []FilterPredicate `json:"filters"`
+	Filters    FilterPredicates  `json:"filters"`
 	Sort       []SortCriteria    `json:"sort"`
 	Attributes []SelectAttribute `json:"attributes"`
 	DeviceIDs  []string          `json:"device_ids"`
@@ -38,16 +38,66 @@ type SearchParams struct {
 }
 
 type Filter struct {
-	Id    string            `json:"id" bson:"_id"`
-	Name  string            `json:"name" bson:"name"`
-	Terms []FilterPredicate `json:"terms" bson:"terms"`
+	Id    string           `json:"id" bson:"_id"`
+	Name  string           `json:"name" bson:"name"`
+	Terms FilterPredicates `json:"terms" bson:"terms"`
 }
 
 type FilterPredicate struct {
-	Scope     Scope       `json:"scope" bson:"scope"`
-	Attribute string      `json:"attribute" bson:"attribute"`
-	Type      string      `json:"type" bson:"type"`
-	Value     interface{} `json:"value" bson:"value"`
+	Scope     Scope  `json:"scope" bson:"scope"`
+	Attribute string `json:"attribute" bson:"attribute"`
+	Type      string `json:"type" bson:"type"`
+	Value     any    `json:"value" bson:"value"`
+}
+
+type FilterPredicates []FilterPredicate
+
+func (filters FilterPredicates) ToMongoFilter() map[string]any {
+	fltrs := []map[string]any{}
+	for _, elem := range filters {
+		scope := elem.Scope
+		switch scope {
+		case AttrScopeIdentity:
+			if elem.Attribute == "status" {
+				fltrs = append(fltrs, map[string]any{elem.Attribute: map[string]any{
+					elem.Type: elem.Value,
+				}})
+			} else {
+				fltrs = append(fltrs, map[string]any{
+					string(scope): map[string]any{"$elemMatch": map[string]any{
+						"name": elem.Attribute,
+						"value": map[string]any{
+							elem.Type: elem.Value,
+						},
+					}},
+				})
+			}
+		case "":
+			scope = AttrScopeInventory
+			fallthrough
+		case AttrScopeInventory, AttrScopeMonitor, AttrScopeTags:
+			fltrs = append(fltrs, map[string]any{
+				string(scope): map[string]any{"$elemMatch": map[string]any{
+					"name": elem.Attribute,
+					"value": map[string]any{
+						elem.Type: elem.Value,
+					},
+				}},
+			})
+
+		case AttrScopeSystem:
+			fltrs = append(fltrs, map[string]any{elem.Attribute: map[string]any{
+				elem.Type: elem.Value,
+			}})
+
+		}
+	}
+	if len(fltrs) > 0 {
+		return map[string]any{
+			"$and": fltrs,
+		}
+	}
+	return nil
 }
 
 type SortCriteria struct {

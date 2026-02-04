@@ -18,13 +18,13 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	"io"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/bson/bsoncodec"
 	"go.mongodb.org/mongo-driver/mongo"
 	mopts "go.mongodb.org/mongo-driver/mongo/options"
 
@@ -60,18 +60,11 @@ const (
 	DbDevAttributesValue = "value"
 	DbDevAttributesScope = "scope"
 	DbDevAttributesName  = "name"
-	DbDevAttributesGroup = DbDevAttributes + "." +
-		model.AttrScopeSystem + "-" + model.AttrNameGroup
-	DbDevAttributesGroupValue = DbDevAttributesGroup + "." +
-		DbDevAttributesValue
 
 	DbScopeInventory = "inventory"
 
 	FiltersAttributesMaxDevices = 5000
 	FiltersAttributesLimit      = 500
-
-	attrIdentityStatus = model.AttrScopeIdentity + "-status"
-	attrSystemTier     = model.AttrScopeSystem + "-tier"
 )
 
 var (
@@ -128,6 +121,11 @@ func NewDataStoreMongo(config DataStoreMongoConfig) (store.DataStore, error) {
 			tlsConfig.InsecureSkipVerify = config.SSLSkipVerify
 			clientOptions.SetTLSConfig(tlsConfig)
 		}
+		reg := bson.NewRegistry()
+		reg.RegisterTypeDecoder(tDeviceP, bsoncodec.ValueDecoderFunc(deviceDecodeValue))
+		reg.RegisterTypeDecoder(tDevice, bsoncodec.ValueDecoderFunc(deviceDecodeValue))
+		clientOptions.SetRegistry(reg)
+		log.NewEmpty().Warn("///////", reg)
 
 		ctx := context.Background()
 		l := log.FromContext(ctx)
@@ -185,49 +183,14 @@ func (db *DataStoreMongo) GetDevices(
 ) ([]model.Device, int, error) {
 	c := db.client.Database(DbName).Collection(DbDevicesColl)
 
-	queryFilters := make([]bson.M, 0, len(q.Filters)+1)
-	queryFilters = append(queryFilters, bson.M{DBKeyTenantID: tenantIDFromContext(ctx)})
-	for _, filter := range q.Filters {
-		op := mongoOperator(filter.Operator)
-		name := fmt.Sprintf(
-			"%s-%s",
-			filter.AttrScope,
-			model.GetDeviceAttributeNameReplacer().Replace(filter.AttrName),
-		)
-		field := fmt.Sprintf("%s.%s.%s", DbDevAttributes, name, DbDevAttributesValue)
-		switch filter.Operator {
-		default:
-			if filter.ValueFloat != nil {
-				queryFilters = append(queryFilters, bson.M{"$or": []bson.M{
-					{field: bson.M{op: filter.Value}},
-					{field: bson.M{op: filter.ValueFloat}},
-				}})
-			} else if filter.ValueTime != nil {
-				queryFilters = append(queryFilters, bson.M{"$or": []bson.M{
-					{field: bson.M{op: filter.Value}},
-					{field: bson.M{op: filter.ValueTime}},
-				}})
-			} else {
-				queryFilters = append(queryFilters, bson.M{field: bson.M{op: filter.Value}})
-			}
-		}
-	}
+	findQuery := q.Filters.ToMongoFilter()
+	findQuery[DBKeyTenantID] = tenantIDFromContext(ctx)
 	if q.GroupName != "" {
-		groupFilter := bson.M{DbDevAttributesGroupValue: q.GroupName}
-		queryFilters = append(queryFilters, groupFilter)
-	}
-	if q.HasGroup != nil {
-		groupExistenceFilter := bson.M{
-			DbDevAttributesGroup: bson.M{
-				"$exists": *q.HasGroup,
-			},
+		findQuery["group"] = q.GroupName
+	} else if q.HasGroup != nil {
+		findQuery["group"] = bson.M{
+			"$exists": *q.HasGroup,
 		}
-		queryFilters = append(queryFilters, groupExistenceFilter)
-	}
-
-	findQuery := bson.M{}
-	if len(queryFilters) > 0 {
-		findQuery["$and"] = queryFilters
 	}
 
 	findOptions := mopts.Find()
@@ -237,19 +200,20 @@ func (db *DataStoreMongo) GetDevices(
 	if q.Limit > 0 {
 		findOptions.SetLimit(int64(q.Limit))
 	}
-	if q.Sort != nil {
-		name := fmt.Sprintf(
-			"%s-%s",
-			q.Sort.AttrScope,
-			model.GetDeviceAttributeNameReplacer().Replace(q.Sort.AttrName),
-		)
-		sortField := fmt.Sprintf("%s.%s.%s", DbDevAttributes, name, DbDevAttributesValue)
-		sortFieldQuery := bson.D{{Key: sortField, Value: 1}}
-		if !q.Sort.Ascending {
-			sortFieldQuery[0].Value = -1
-		}
-		findOptions.SetSort(sortFieldQuery)
-	}
+	// FIXME:
+	// if q.Sort != nil {
+	// 	name := fmt.Sprintf(
+	// 		"%s-%s",
+	// 		q.Sort.AttrScope,
+	// 		model.GetDeviceAttributeNameReplacer().Replace(q.Sort.AttrName),
+	// 	)
+	// 	sortField := fmt.Sprintf("%s.%s.%s", DbDevAttributes, name, DbDevAttributesValue)
+	// 	sortFieldQuery := bson.D{{Key: sortField, Value: 1}}
+	// 	if !q.Sort.Ascending {
+	// 		sortFieldQuery[0].Value = -1
+	// 	}
+	// 	findOptions.SetSort(sortFieldQuery)
+	// }
 
 	cursor, err := c.Find(ctx, findQuery, findOptions)
 	if err != nil {
@@ -283,7 +247,10 @@ func (db *DataStoreMongo) GetDevice(
 	if id == model.NilDeviceID {
 		return nil, nil
 	}
-	if err := c.FindOne(ctx, bson.M{DbDevId: id, DBKeyTenantID: tenantIDFromContext(ctx)}).
+	if err := c.FindOne(ctx, bson.M{
+		DbDevId:       id,
+		DBKeyTenantID: tenantIDFromContext(ctx)},
+	).
 		Decode(&res); err != nil {
 		switch err {
 		case mongo.ErrNoDocuments:
@@ -298,13 +265,6 @@ func (db *DataStoreMongo) GetDevice(
 
 // AddDevice inserts a new device, initializing the inventory data.
 func (db *DataStoreMongo) AddDevice(ctx context.Context, dev *model.Device) error {
-	if dev.Group != "" {
-		dev.Attributes = append(dev.Attributes, model.DeviceAttribute{
-			Scope: model.AttrScopeSystem,
-			Name:  model.AttrNameGroup,
-			Value: dev.Group,
-		})
-	}
 	_, err := db.UpsertDevicesAttributesWithUpdated(
 		ctx, []model.DeviceID{dev.ID}, dev.Attributes, "", "",
 	)
@@ -359,6 +319,45 @@ func makeDevsWithIds(ids []model.DeviceID) []model.DeviceUpdate {
 	return devices
 }
 
+type DeviceAttributes model.DeviceAttributes
+
+func (attrs DeviceAttributes) MarshalBSON() ([]byte, error) {
+	ret := bson.M{}
+	for _, attr := range attrs {
+		scope := attr.Scope
+		switch scope {
+		case model.AttrScopeIdentity:
+			if attr.Name == "status" {
+				ret[attr.Name] = attr.Value
+			} else {
+				if a, ok := ret[scope].([]model.DeviceAttribute); ok {
+					ret[scope] = append(a, attr)
+				} else {
+					ret[scope] = []model.DeviceAttribute{attr}
+				}
+			}
+
+		case model.AttrScopeInventory, "":
+			scope = model.AttrScopeInventory
+			fallthrough
+		case model.AttrScopeTags,
+			model.AttrScopeMonitor:
+			if a, ok := ret[scope].([]model.DeviceAttribute); ok {
+				ret[scope] = append(a, attr)
+			} else {
+				ret[scope] = []model.DeviceAttribute{attr}
+			}
+
+		case model.AttrScopeSystem:
+			ret[attr.Name] = attr.Value
+
+		default:
+			return nil, fmt.Errorf("unknown scope %q", attr.Scope)
+		}
+	}
+	return bson.Marshal(ret)
+}
+
 func (db *DataStoreMongo) upsertAttributes(
 	ctx context.Context,
 	devices []model.DeviceUpdate,
@@ -369,10 +368,9 @@ func (db *DataStoreMongo) upsertAttributes(
 	etag string,
 	notModifiedAfter *time.Time,
 ) (*model.UpdateResult, error) {
-	const systemScope = DbDevAttributes + "." + model.AttrScopeSystem
-	const createdField = systemScope + "-" + model.AttrNameCreated
+	const createdField = model.AttrNameCreated
 	const etagField = model.AttrNameTagsEtag
-	const updatedTS = "attributes.system-" + DbDevUpdatedTs + ".value"
+	const updatedTS = DbDevUpdatedTs
 	var (
 		result *model.UpdateResult
 		err    error
@@ -382,32 +380,28 @@ func (db *DataStoreMongo) upsertAttributes(
 		Database(DbName).
 		Collection(DbDevicesColl)
 
-	update, err := makeAttrUpsert(attrs)
-	if err != nil {
-		return nil, err
-	}
-
 	now := time.Now()
 	tenantID := tenantIDFromContext(ctx)
 	oninsert := bson.M{
-		createdField: model.DeviceAttribute{
-			Scope: model.AttrScopeSystem,
-			Name:  model.AttrNameCreated,
-			Value: now,
-		},
+		createdField:  now,
 		DBKeyTenantID: tenantID,
 	}
+	updateAttrs := DeviceAttributes(attrs)
 	if !withRevision {
-		oninsert["revision"] = 0
+		updateAttrs = append(updateAttrs, model.DeviceAttribute{
+			Name:  DbDevRevision,
+			Value: 0,
+			Scope: model.AttrScopeSystem,
+		})
 	}
 
-	const updatedField = systemScope + "-" + model.AttrNameUpdated
 	if withUpdated {
-		update[updatedField] = model.DeviceAttribute{
-			Scope: model.AttrScopeSystem,
-			Name:  model.AttrNameUpdated,
+		const updatedField = model.AttrNameUpdated
+		updateAttrs = append(updateAttrs, model.DeviceAttribute{
+			Name:  updatedField,
 			Value: now,
-		}
+			Scope: model.AttrScopeSystem,
+		})
 	}
 
 	switch len(devices) {
@@ -424,10 +418,18 @@ func (db *DataStoreMongo) upsertAttributes(
 
 		if withRevision {
 			filter[DbDevRevision] = bson.M{"$lt": devices[0].Revision}
-			update[DbDevRevision] = devices[0].Revision
+			updateAttrs = append(updateAttrs, model.DeviceAttribute{
+				Name:  DbDevRevision,
+				Value: devices[0].Revision,
+				Scope: model.AttrScopeSystem,
+			})
 		}
 		if scope == model.AttrScopeTags {
-			update[etagField] = uuid.New().String()
+			updateAttrs = append(updateAttrs, model.DeviceAttribute{
+				Name:  DbDevRevision,
+				Value: uuid.New().String(),
+				Scope: model.AttrScopeSystem,
+			})
 			updateOpts = mopts.FindOneAndUpdate().
 				SetUpsert(false).
 				SetReturnDocument(mopts.After)
@@ -442,8 +444,8 @@ func (db *DataStoreMongo) upsertAttributes(
 			}
 		}
 
-		update = bson.M{
-			"$set":         update,
+		update := bson.M{
+			"$set":         updateAttrs,
 			"$setOnInsert": oninsert,
 		}
 
@@ -474,9 +476,14 @@ func (db *DataStoreMongo) upsertAttributes(
 		for i, dev := range devices {
 			umod := mongo.NewUpdateOneModel()
 			filter := bson.M{"_id": dev.Id, DBKeyTenantID: tenantID}
+			update := slices.Clone(updateAttrs)
 			if withRevision {
 				filter[DbDevRevision] = bson.M{"$lt": dev.Revision}
-				update[DbDevRevision] = dev.Revision
+				update = append(update, model.DeviceAttribute{
+					Name:  DbDevRevision,
+					Value: dev.Revision,
+					Scope: model.AttrScopeSystem,
+				})
 			}
 			if notModifiedAfter != nil {
 				filter["$or"] = []bson.M{
@@ -513,110 +520,6 @@ func (db *DataStoreMongo) upsertAttributes(
 	return result, err
 }
 
-// makeAttrField is a convenience function for composing attribute field names.
-func makeAttrField(attrName, attrScope string, subFields ...string) string {
-	field := fmt.Sprintf(
-		"%s.%s-%s",
-		DbDevAttributes,
-		attrScope,
-		model.GetDeviceAttributeNameReplacer().Replace(attrName),
-	)
-	if len(subFields) > 0 {
-		field = strings.Join(
-			append([]string{field}, subFields...), ".",
-		)
-	}
-	return field
-}
-
-// makeAttrUpsert creates a new upsert document for the given attributes.
-func makeAttrUpsert(attrs model.DeviceAttributes) (bson.M, error) {
-	var fieldName string
-	upsert := make(bson.M)
-
-	for i := range attrs {
-		if attrs[i].Name == "" {
-			return nil, store.ErrNoAttrName
-		}
-		if attrs[i].Scope == "" {
-			// Default to inventory scope
-			attrs[i].Scope = model.AttrScopeInventory
-		}
-
-		fieldName = makeAttrField(
-			attrs[i].Name,
-			attrs[i].Scope,
-			DbDevAttributesScope,
-		)
-		upsert[fieldName] = attrs[i].Scope
-
-		fieldName = makeAttrField(
-			attrs[i].Name,
-			attrs[i].Scope,
-			DbDevAttributesName,
-		)
-		upsert[fieldName] = attrs[i].Name
-
-		if attrs[i].Value != nil {
-			fieldName = makeAttrField(
-				attrs[i].Name,
-				attrs[i].Scope,
-				DbDevAttributesValue,
-			)
-			upsert[fieldName] = attrs[i].Value
-		}
-
-		if attrs[i].Description != nil {
-			fieldName = makeAttrField(
-				attrs[i].Name,
-				attrs[i].Scope,
-				DbDevAttributesDesc,
-			)
-			upsert[fieldName] = attrs[i].Description
-		}
-
-		if attrs[i].Timestamp != nil {
-			fieldName = makeAttrField(
-				attrs[i].Name,
-				attrs[i].Scope,
-				DbDevAttributesTs,
-			)
-			upsert[fieldName] = attrs[i].Timestamp
-		}
-	}
-	return upsert, nil
-}
-
-// makeAttrRemove creates a new unset document to remove attributes
-func makeAttrRemove(attrs model.DeviceAttributes) (bson.M, error) {
-	var fieldName string
-	remove := make(bson.M)
-
-	for i := range attrs {
-		if attrs[i].Name == "" {
-			return nil, store.ErrNoAttrName
-		}
-		if attrs[i].Scope == "" {
-			// Default to inventory scope
-			attrs[i].Scope = model.AttrScopeInventory
-		}
-		fieldName = makeAttrField(
-			attrs[i].Name,
-			attrs[i].Scope,
-		)
-		remove[fieldName] = true
-	}
-	return remove, nil
-}
-
-func mongoOperator(co store.ComparisonOperator) string {
-	switch co {
-	case store.Eq:
-		return "$eq"
-	}
-	return ""
-}
-
 func (db *DataStoreMongo) UpsertRemoveDeviceAttributes(
 	ctx context.Context,
 	id model.DeviceID,
@@ -625,26 +528,18 @@ func (db *DataStoreMongo) UpsertRemoveDeviceAttributes(
 	scope string,
 	etag string,
 ) (*model.UpdateResult, error) {
-	const systemScope = DbDevAttributes + "." + model.AttrScopeSystem
-	const updatedField = systemScope + "-" + model.AttrNameUpdated
-	const createdField = systemScope + "-" + model.AttrNameCreated
+	const updatedField = model.AttrNameUpdated
+	const createdField = model.AttrNameCreated
 	const etagField = model.AttrNameTagsEtag
 	var (
 		err error
 	)
+	now := time.Now()
 
 	c := db.client.
 		Database(DbName).
 		Collection(DbDevicesColl)
 
-	update, err := makeAttrUpsert(updateAttrs)
-	if err != nil {
-		return nil, err
-	}
-	remove, err := makeAttrRemove(removeAttrs)
-	if err != nil {
-		return nil, err
-	}
 	filter := bson.M{DBKeyID: id, DBKeyTenantID: tenantIDFromContext(ctx)}
 	if etag != "" {
 		filter[etagField] = bson.M{"$eq": etag}
@@ -654,32 +549,27 @@ func (db *DataStoreMongo) UpsertRemoveDeviceAttributes(
 		SetUpsert(true).
 		SetReturnDocument(mopts.After)
 	if scope == model.AttrScopeTags {
-		update[etagField] = uuid.New().String()
+		updateAttrs = append(updateAttrs, model.DeviceAttribute{
+			Name:  etagField,
+			Value: uuid.New().String(),
+			Scope: model.AttrScopeSystem,
+		})
 		updateOpts = updateOpts.SetUpsert(false)
 	}
-	now := time.Now()
 	if scope != model.AttrScopeTags {
-		update[updatedField] = model.DeviceAttribute{
-			Scope: model.AttrScopeSystem,
+		updateAttrs = append(updateAttrs, model.DeviceAttribute{
 			Name:  model.AttrNameUpdated,
 			Value: now,
-		}
+			Scope: model.AttrScopeSystem,
+		})
 	}
-	update = bson.M{
-		"$set": update,
+	update := bson.M{
+		"$set": DeviceAttributes(updateAttrs),
 		"$setOnInsert": bson.M{
-			createdField: model.DeviceAttribute{
-				Scope: model.AttrScopeSystem,
-				Name:  model.AttrNameCreated,
-				Value: now,
-			},
+			createdField:  now,
 			DBKeyTenantID: tenantIDFromContext(ctx),
 		},
 	}
-	if len(remove) > 0 {
-		update["$unset"] = remove
-	}
-
 	device := &model.Device{}
 	res := c.FindOneAndUpdate(ctx, filter, update, updateOpts)
 	err = res.Decode(device)
@@ -718,11 +608,7 @@ func (db *DataStoreMongo) UpdateDevicesGroup(
 	}
 	update := bson.M{
 		"$set": bson.M{
-			DbDevAttributesGroup: model.DeviceAttribute{
-				Scope: model.AttrScopeSystem,
-				Name:  DbDevGroup,
-				Value: group,
-			},
+			model.AttrNameGroup: group,
 		},
 	}
 	res, err := collDevs.UpdateMany(ctx, filter, update)
@@ -847,8 +733,8 @@ func (db *DataStoreMongo) DeleteGroup(
 	collDevs := database.Collection(DbDevicesColl)
 
 	filter := bson.M{
-		DbDevAttributesGroupValue: group,
-		DBKeyTenantID:             tenantIDFromContext(ctx),
+		model.AttrNameGroup: group,
+		DBKeyTenantID:       tenantIDFromContext(ctx),
 	}
 
 	const batchMaxSize = 100
@@ -867,7 +753,7 @@ func (db *DataStoreMongo) DeleteGroup(
 		batch := make([]model.DeviceID, batchMaxSize)
 		batchSize := 0
 
-		update := bson.M{"$unset": bson.M{DbDevAttributesGroup: 1}}
+		update := bson.M{"$unset": bson.M{model.AttrNameGroup: 1}}
 		device := &model.Device{}
 		defer close(deviceIDs)
 
@@ -924,13 +810,13 @@ func (db *DataStoreMongo) UnsetDevicesGroup(
 	// Append filter on group
 	filter = append(
 		filter,
-		bson.E{Key: DbDevAttributesGroupValue, Value: group},
+		bson.E{Key: model.AttrNameGroup, Value: group},
 		bson.E{Key: DBKeyTenantID, Value: tenantIDFromContext(ctx)},
 	)
 	// Create unset operation on group attribute
 	update := bson.M{
 		"$unset": bson.M{
-			DbDevAttributesGroup: "",
+			model.AttrNameGroup: "",
 		},
 	}
 	res, err := collDevs.UpdateMany(ctx, filter, update)
@@ -967,7 +853,7 @@ func (db *DataStoreMongo) ListGroups(
 		Collection(DbDevicesColl)
 
 	fltr := bson.D{
-		{Key: DbDevAttributesGroupValue, Value: bson.M{"$exists": true}},
+		{Key: model.AttrNameGroup, Value: bson.M{"$exists": true}},
 		{Key: DBKeyTenantID, Value: tenantIDFromContext(ctx)},
 	}
 	if len(fltr) > 0 {
@@ -982,7 +868,7 @@ func (db *DataStoreMongo) ListGroups(
 		}
 	}
 	results, err := c.Distinct(
-		ctx, DbDevAttributesGroupValue, fltr,
+		ctx, model.AttrNameGroup, fltr,
 	)
 	if err != nil {
 		return nil, err
@@ -1006,8 +892,8 @@ func (db *DataStoreMongo) GetDevicesByGroup(
 		Collection(DbDevicesColl)
 
 	filter := bson.M{
-		DbDevAttributesGroupValue: group,
-		DBKeyTenantID:             tenantIDFromContext(ctx),
+		model.AttrNameGroup: group,
+		DBKeyTenantID:       tenantIDFromContext(ctx),
 	}
 	result := c.FindOne(ctx, filter)
 	if result == nil {
@@ -1083,65 +969,16 @@ func (db *DataStoreMongo) GetAllAttributeNames(ctx context.Context) ([]string, e
 	c := db.client.Database(DbName).Collection(DbDevicesColl)
 
 	match := bson.M{DBKeyTenantID: tenantIDFromContext(ctx)}
-	project := bson.M{
-		"$project": bson.M{
-			"arrayofkeyvalue": bson.M{
-				"$objectToArray": "$$ROOT.attributes",
-			},
-		},
-	}
-
-	unwind := bson.M{
-		"$unwind": "$arrayofkeyvalue",
-	}
-
-	group := bson.M{
-		"$group": bson.M{
-			"_id": nil,
-			"allkeys": bson.M{
-				"$addToSet": "$arrayofkeyvalue.v.name",
-			},
-		},
-	}
-
-	l := log.FromContext(ctx)
-	cursor, err := c.Aggregate(ctx, []bson.M{
-		match,
-		project,
-		unwind,
-		group,
-	})
+	result, err := c.Distinct(ctx, "inventory.name", match)
 	if err != nil {
 		return nil, err
 	}
-	defer cursor.Close(ctx)
-
-	cursor.Next(ctx)
-	elem := &bson.D{}
-	err = cursor.Decode(elem)
-	if err != nil {
-		if err != io.EOF {
-			return nil, errors.Wrap(err, "failed to get attributes")
-		} else {
-			return make([]string, 0), nil
+	attributeNames := make([]string, 0, len(result))
+	for _, res := range result {
+		if s, ok := res.(string); ok {
+			attributeNames = append(attributeNames, s)
 		}
 	}
-	bsonValue, err := bson.Marshal(elem)
-	if err != nil {
-		return make([]string, 0), nil
-	}
-	var mapValue bson.M
-	err = bson.Unmarshal(bsonValue, &mapValue)
-	if err != nil {
-		return make([]string, 0), nil
-	}
-	results := mapValue["allkeys"].(primitive.A)
-	attributeNames := make([]string, len(results))
-	for i, d := range results {
-		attributeNames[i] = d.(string)
-		l.Debugf("GetAllAttributeNames got: '%v'", d)
-	}
-
 	return attributeNames, nil
 }
 
@@ -1153,20 +990,9 @@ func (db *DataStoreMongo) SearchDevices(
 
 	queryFilters := make([]bson.M, 0, len(searchParams.Filters)+1)
 	queryFilters = append(queryFilters, bson.M{DBKeyTenantID: tenantIDFromContext(ctx)})
-	for _, filter := range searchParams.Filters {
-		op := filter.Type
-		var field string
-		if filter.Scope == model.AttrScopeIdentity && filter.Attribute == model.AttrNameID {
-			field = DbDevId
-		} else {
-			name := fmt.Sprintf(
-				"%s-%s",
-				filter.Scope,
-				model.GetDeviceAttributeNameReplacer().Replace(filter.Attribute),
-			)
-			field = fmt.Sprintf("%s.%s.%s", DbDevAttributes, name, DbDevAttributesValue)
-		}
-		queryFilters = append(queryFilters, bson.M{field: bson.M{op: filter.Value}})
+	mgoFilter := searchParams.Filters.ToMongoFilter()
+	if mgoFilter != nil {
+		queryFilters = append(queryFilters, mgoFilter)
 	}
 
 	// FIXME: remove after migrating ids to attributes
@@ -1189,21 +1015,23 @@ func (db *DataStoreMongo) SearchDevices(
 	findOptions.SetLimit(int64(searchParams.PerPage))
 
 	if len(searchParams.Attributes) > 0 {
-		name := fmt.Sprintf(
-			"%s-%s",
-			model.AttrScopeSystem,
-			model.GetDeviceAttributeNameReplacer().Replace(DbDevUpdatedTs),
-		)
-		field := fmt.Sprintf("%s.%s", DbDevAttributes, name)
-		projection := bson.M{field: 1}
+		var scopeProjections = map[string][]string{}
 		for _, attribute := range searchParams.Attributes {
-			name := fmt.Sprintf(
-				"%s-%s",
-				attribute.Scope,
-				model.GetDeviceAttributeNameReplacer().Replace(attribute.Attribute),
+			scopeProjections[string(attribute.Scope)] = append(
+				scopeProjections[string(attribute.Scope)],
+				attribute.Attribute,
 			)
-			field := fmt.Sprintf("%s.%s", DbDevAttributes, name)
-			projection[field] = 1
+		}
+		projection := make(map[string]any, len(scopeProjections))
+		for scope, in := range scopeProjections {
+			projection[scope] = bson.M{
+				"$filter": bson.M{
+					"input": "$" + scope,
+					"cond": bson.M{
+						"$in": bson.A{"$$this.name", in},
+					},
+				},
+			}
 		}
 		findOptions.SetProjection(projection)
 	}
@@ -1263,7 +1091,7 @@ func (db *DataStoreMongo) GetDeviceTierStatisticsByStatus(
 	match := bson.M{
 		"$match": bson.M{
 			DBKeyTenantID: tenantIDFromContext(ctx),
-			indexAttrName(attrIdentityStatus): bson.M{
+			"status": bson.M{
 				"$in": []string{
 					model.DeviceStatusAccepted,
 					model.DeviceStatusPending,
@@ -1274,10 +1102,10 @@ func (db *DataStoreMongo) GetDeviceTierStatisticsByStatus(
 	group := bson.M{
 		"$group": bson.M{
 			"_id": bson.M{
-				"status": "$" + indexAttrName(attrIdentityStatus),
+				"status": "$status",
 				"tier": bson.M{
 					"$ifNull": bson.A{
-						"$" + indexAttrName(attrSystemTier),
+						"$tier",
 						tiers.StandardTier,
 					},
 				},
@@ -1344,8 +1172,8 @@ func indexAttr(s *mongo.Client, ctx context.Context, attr string) error {
 
 	indexView := c.Indexes()
 	keys := bson.D{
-		{Key: indexAttrName(attrIdentityStatus), Value: 1},
-		{Key: indexAttrName(attr), Value: 1},
+		{Key: "status", Value: 1},
+		{Key: "$elemMatch", Value: bson.M{"name": attr}},
 	}
 	_, err := indexView.CreateOne(ctx, mongo.IndexModel{Keys: keys, Options: &mopts.IndexOptions{
 		Name: &attr,
@@ -1369,10 +1197,6 @@ func indexAttr(s *mongo.Client, ctx context.Context, attr string) error {
 	}
 
 	return nil
-}
-
-func indexAttrName(attr string) string {
-	return fmt.Sprintf("attributes.%s.value", attr)
 }
 
 func isTooManyIndexes(e error) bool {

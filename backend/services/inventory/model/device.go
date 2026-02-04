@@ -23,9 +23,6 @@ import (
 
 	validation "github.com/go-ozzo/ozzo-validation/v4"
 	"github.com/pkg/errors"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/bsontype"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 const (
@@ -71,11 +68,11 @@ type DeviceGroups struct {
 }
 
 type DeviceAttribute struct {
-	Name        string      `json:"name" bson:",omitempty"`
-	Description *string     `json:"description,omitempty" bson:",omitempty"`
-	Value       interface{} `json:"value" bson:",omitempty"`
-	Scope       string      `json:"scope" bson:",omitempty"`
-	Timestamp   *time.Time  `json:"timestamp,omitempty" bson:",omitempty"`
+	Name        string     `json:"name" bson:",omitempty"`
+	Scope       string     `json:"scope" bson:"-"`
+	Value       any        `json:"value" bson:",omitempty"`
+	Description *string    `json:"description,omitempty" bson:",omitempty"`
+	Timestamp   *time.Time `json:"timestamp,omitempty" bson:",omitempty"`
 }
 
 func (da DeviceAttribute) Validate() error {
@@ -152,7 +149,7 @@ type Device struct {
 	Attributes DeviceAttributes `json:"attributes,omitempty" bson:"attributes,omitempty"`
 
 	//device's group name
-	Group GroupName `json:"-" bson:"group,omitempty"`
+	Group GroupName `json:"group,omitempty" bson:"group,omitempty"`
 
 	CreatedTs time.Time `json:"-" bson:"created_ts,omitempty"`
 	//Timestamp of the last attribute update.
@@ -166,50 +163,8 @@ type Device struct {
 
 	//text attribute for the full-text search
 	Text string `json:"-" bson:"text,omitempty"`
-}
 
-// internalDevice is only used internally to avoid recursive type-loops for
-// member functions.
-type internalDevice Device
-
-func (d *Device) UnmarshalBSON(b []byte) error {
-	if err := bson.Unmarshal(b, (*internalDevice)(d)); err != nil {
-		return err
-	}
-	for _, attr := range d.Attributes {
-		if attr.Scope == AttrScopeSystem {
-			switch attr.Name {
-			case AttrNameGroup:
-				group := attr.Value.(string)
-				d.Group = GroupName(group)
-			case AttrNameUpdated:
-				if attr.Value != nil {
-					dateTime := attr.Value.(primitive.DateTime).Time()
-					d.UpdatedTs = &dateTime
-				} else {
-					d.UpdatedTs = nil
-				}
-			case AttrNameCreated:
-				dateTime := attr.Value.(primitive.DateTime)
-				d.CreatedTs = dateTime.Time()
-			}
-		}
-	}
-	return nil
-}
-
-func (d Device) MarshalBSON() ([]byte, error) {
-	if err := d.Validate(); err != nil {
-		return nil, err
-	}
-	if d.Group != "" {
-		d.Attributes = append(d.Attributes, DeviceAttribute{
-			Scope: AttrScopeSystem,
-			Name:  AttrNameGroup,
-			Value: d.Group,
-		})
-	}
-	return bson.Marshal(internalDevice(d))
+	Status string `json:"-" bson:"status"`
 }
 
 func (d Device) Validate() error {
@@ -283,45 +238,6 @@ func (d DeviceAttributes) Validate() error {
 
 func GetDeviceAttributeNameReplacer() *strings.Replacer {
 	return strings.NewReplacer(".", string(runeDot), "$", string(runeDollar))
-}
-
-// UnmarshalBSONValue correctly unmarshals DeviceAttributes from Device
-// documents stored in the DB.
-func (d *DeviceAttributes) UnmarshalBSONValue(t bsontype.Type, b []byte) error {
-	raw := bson.Raw(b)
-	elems, err := raw.Elements()
-	if err != nil {
-		return err
-	}
-	*d = make(DeviceAttributes, len(elems))
-	for i, elem := range elems {
-		err = elem.Value().Unmarshal(&(*d)[i])
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-// MarshalBSONValue marshals the DeviceAttributes to a mongo-compatible
-// document. That is, each attribute is given a unique field consisting of
-// "<scope>-<name>".
-func (d DeviceAttributes) MarshalBSONValue() (bsontype.Type, []byte, error) {
-	attrs := make(bson.D, len(d))
-	replacer := GetDeviceAttributeNameReplacer()
-	for i := range d {
-		attr := DeviceAttribute{
-			Name:        d[i].Name,
-			Description: d[i].Description,
-			Value:       d[i].Value,
-			Scope:       d[i].Scope,
-			Timestamp:   d[i].Timestamp,
-		}
-		attrs[i].Key = attr.Scope + "-" + replacer.Replace(d[i].Name)
-		attrs[i].Value = &attr
-	}
-	return bson.MarshalValue(attrs)
 }
 
 type DeviceUpdate struct {

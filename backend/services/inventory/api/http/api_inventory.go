@@ -162,7 +162,7 @@ func parseSortParam(c *gin.Context) (*store.Sort, error) {
 // Equality operator default value is `eq`
 //
 // eg. `attr_name1=value1` or `attr_name1=eq:value1`
-func parseFilterParams(c *gin.Context) ([]store.Filter, error) {
+func parseFilterParams(c *gin.Context) (store.Filters, error) {
 	knownParams := []string{
 		utils.PageName,
 		utils.PerPageName,
@@ -170,7 +170,7 @@ func parseFilterParams(c *gin.Context) ([]store.Filter, error) {
 		queryParamHasGroup,
 		queryParamGroup,
 	}
-	filters := make([]store.Filter, 0)
+	filters := make(store.Filters, 0)
 	var filter store.Filter
 	for name := range c.Request.URL.Query() {
 		if utils.ContainsString(name, knownParams) {
@@ -217,16 +217,6 @@ func parseFilterParams(c *gin.Context) ([]store.Filter, error) {
 				filter.Value = valueStr
 				filter.Operator = store.Eq
 			}
-		}
-
-		floatValue, err := strconv.ParseFloat(filter.Value, 64)
-		if err == nil {
-			filter.ValueFloat = &floatValue
-		}
-
-		timeValue, err := time.Parse("2006-01-02T15:04:05Z", filter.Value)
-		if err == nil {
-			filter.ValueTime = &timeValue
 		}
 
 		filters = append(filters, filter)
@@ -644,10 +634,7 @@ func (i *ManagementAPI) GetDevicesByGroupHandler(c *gin.Context) {
 			rest.RenderError(c, http.StatusNotFound, err)
 
 		} else {
-			rest.RenderError(c,
-				http.StatusInternalServerError,
-				errors.New("internal error"),
-			)
+			rest.RenderInternalError(c, err)
 		}
 		return
 	}
@@ -828,10 +815,7 @@ func (i *ManagementAPI) GetDeviceGroupHandler(c *gin.Context) {
 				store.ErrDevNotFound,
 			)
 		} else {
-			rest.RenderError(c,
-				http.StatusInternalServerError,
-				errors.New("internal error"),
-			)
+			rest.RenderInternalError(c, err)
 		}
 		return
 	}
@@ -914,10 +898,7 @@ func (i *ManagementAPI) FiltersSearchHandler(c *gin.Context) {
 		if strings.Contains(err.Error(), "BadValue") {
 			rest.RenderError(c, http.StatusBadRequest, err)
 		} else {
-			rest.RenderError(c,
-				http.StatusInternalServerError,
-				errors.New("internal error"),
-			)
+			rest.RenderInternalError(c, err)
 		}
 		return
 	}
@@ -948,10 +929,7 @@ func (i *InternalAPI) InternalFiltersSearchHandler(c *gin.Context) {
 		if strings.Contains(err.Error(), "BadValue") {
 			rest.RenderError(c, http.StatusBadRequest, err)
 		} else {
-			rest.RenderError(c,
-				http.StatusInternalServerError,
-				errors.New("internal error"),
-			)
+			rest.RenderInternalError(c, err)
 		}
 		return
 	}
@@ -1051,10 +1029,7 @@ func (i *InternalAPI) GetDeviceGroupsInternalHandler(c *gin.Context) {
 				store.ErrDevNotFound,
 			)
 		} else {
-			rest.RenderError(c,
-				http.StatusInternalServerError,
-				errors.New("internal error"),
-			)
+			rest.RenderInternalError(c, err)
 		}
 		return
 	}

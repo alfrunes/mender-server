@@ -116,7 +116,7 @@ func (m *migration_1_0_0) doMaintenance(from migrate.Version) error {
 			if device.Group != "" {
 				update[groupNameField] = model.AttrNameGroup
 				update[groupScopeField] = model.AttrScopeSystem
-				update[DbDevAttributesGroupValue] = device.Group
+				update[model.AttrNameGroup] = device.Group
 			}
 			updateModel.SetUpdate(bson.M{"$set": update})
 			bulkUpdates = append(bulkUpdates, updateModel)
@@ -167,9 +167,6 @@ func (m *migration_1_0_0) doMigrate(from migrate.Version) error {
 		m.ctx,
 		bson.M{DbDevGroup: bson.M{"$exists": true}},
 		bson.M{
-			"$rename": bson.M{
-				model.AttrNameGroup: DbDevAttributesGroupValue,
-			},
 			"$set": bson.M{
 				groupNameField:  model.AttrNameGroup,
 				groupScopeField: model.AttrScopeSystem,

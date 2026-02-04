@@ -13,21 +13,75 @@
 //	limitations under the License.
 package store
 
-import "time"
+import (
+	"fmt"
+
+	"github.com/mendersoftware/mender-server/services/inventory/model"
+)
 
 type ComparisonOperator int
+
+func (op ComparisonOperator) String() string {
+	switch op {
+	case Eq:
+		return "$eq"
+	}
+	panic(fmt.Sprintf("invalid comparison operator %s", op))
+}
 
 const (
 	Eq ComparisonOperator = 1 << iota
 )
 
 type Filter struct {
-	AttrName   string
-	AttrScope  string
-	Value      string
-	ValueFloat *float64
-	ValueTime  *time.Time
-	Operator   ComparisonOperator
+	AttrName  string
+	AttrScope string
+	Value     any
+	Operator  ComparisonOperator
+}
+
+type Filters []Filter
+
+func (filters Filters) ToMongoFilter() map[string]any {
+	fltrs := make([]map[string]any, 0, len(filters))
+	for _, elem := range filters {
+		scope := elem.AttrScope
+		switch scope {
+		case model.AttrScopeSystem:
+			fltrs = append(fltrs, map[string]any{elem.AttrName: map[string]any{
+				elem.Operator.String(): elem.Value,
+			}})
+		case model.AttrScopeIdentity:
+			if elem.AttrName == "status" {
+				fltrs = append(fltrs, map[string]any{elem.AttrName: map[string]any{
+					elem.Operator.String(): elem.Value,
+				}})
+			} else {
+				fltrs = append(fltrs, map[string]any{
+					string(scope): map[string]any{"$elemMatch": map[string]any{
+						"name": elem.AttrName,
+						"value": map[string]any{
+							elem.Operator.String(): elem.Value,
+						},
+					}},
+				})
+			}
+
+		case "":
+			scope = model.AttrScopeInventory
+			fallthrough
+		default:
+			fltrs = append(fltrs, map[string]any{
+				string(scope): map[string]any{"$elemMatch": map[string]any{
+					"name": elem.AttrName,
+					"value": map[string]any{
+						elem.Operator.String(): elem.Value,
+					},
+				}},
+			})
+		}
+	}
+	return map[string]any{"$and": fltrs}
 }
 
 type Sort struct {
@@ -39,7 +93,7 @@ type Sort struct {
 type ListQuery struct {
 	Skip      int
 	Limit     int
-	Filters   []Filter
+	Filters   Filters
 	Sort      *Sort
 	HasGroup  *bool
 	GroupName string
