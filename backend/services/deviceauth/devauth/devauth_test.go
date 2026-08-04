@@ -994,10 +994,9 @@ func TestDevAuthPreauthorizeDevice(t *testing.T) {
 			err: errors.New("failed to add device: generic error"),
 		},
 		{
-			desc:               "error: add auth set, exists",
-			req:                req,
-			updateDeviceStatus: true,
-			callDb:             true,
+			desc:   "error: add auth set, exists",
+			req:    req,
+			callDb: true,
 
 			addAuthSetErr: store.ErrObjectExists,
 
@@ -1005,10 +1004,9 @@ func TestDevAuthPreauthorizeDevice(t *testing.T) {
 			err:    ErrDeviceExists,
 		},
 		{
-			desc:               "error: add auth set, exists",
-			req:                req,
-			updateDeviceStatus: true,
-			callDb:             true,
+			desc:   "error: add auth set, generic error",
+			req:    req,
+			callDb: true,
 
 			addAuthSetErr: errors.New("generic error"),
 
@@ -3178,22 +3176,29 @@ func TestDevAuthDeleteAuthSet(t *testing.T) {
 				revision = 0
 			}
 			if tc.submitJob {
-				if status == model.DevStatusNoAuth {
-					status = "decommissioned"
-				}
 				if tc.dbGetDeviceStatusErr == store.ErrAuthSetNotFound {
 					status = "noauth"
+				}
+				var events any = []client.DeviceAuthEvent{updateDeviceStatusEvent(tc.authSet, &model.Device{
+					Id:       tc.devId,
+					Revision: revision,
+				}, status)}
+
+				if tc.authSet.Status == model.DevStatusPreauth &&
+					status == model.DevStatusNoAuth {
+					status = "decommissioned"
+					events = []model.DeviceInventoryUpdate{{
+						Id:       tc.devId,
+						Revision: revision,
+					}}
 				}
 				req := client.ApiStartWorkflowRequest{
 					ApiService: co,
 				}.RequestBody(map[string]interface{}{
 					"device_status": status,
-					"devices": []model.DeviceInventoryUpdate{{
-						Id:       tc.devId,
-						Revision: revision,
-					}},
-					"request_id": "",
-					"tenant_id":  tc.tenant,
+					"devices":       events,
+					"request_id":    "",
+					"tenant_id":     tc.tenant,
 				})
 				co.EXPECT().
 					StartWorkflow(mtesting.ContextMatcher(), "update_device_status").
