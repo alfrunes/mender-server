@@ -482,6 +482,7 @@ func TestDevAuthSubmitAuthRequest(t *testing.T) {
 							IdDataSha256: idDataHash,
 							IdDataStruct: idDataStruct,
 							Id:           devId,
+							Provisioned:  true,
 						}
 					}
 					return nil
@@ -664,7 +665,6 @@ func TestDevAuthSubmitAuthRequestPreauth(t *testing.T) {
 			expectedWorkflows: map[string]error{
 				"provision_device":        nil,
 				"update_device_inventory": nil,
-				"update_device_status":    nil,
 			},
 		},
 		{
@@ -749,8 +749,7 @@ func TestDevAuthSubmitAuthRequestPreauth(t *testing.T) {
 				Status: model.DevStatusPreauth,
 			},
 			expectedWorkflows: map[string]error{
-				"provision_device":     errors.New("workflows failed"),
-				"update_device_status": nil,
+				"provision_device": errors.New("workflows failed"),
 			},
 			err: errors.New("submit device provisioning job error: workflows failed"),
 		},
@@ -774,7 +773,6 @@ func TestDevAuthSubmitAuthRequestPreauth(t *testing.T) {
 			//coSubmitProvisionDeviceJobErr: errors.New("workflows shouldn't be called"), // MEN-6961: we accept preauth at all times
 			res: "dummytoken",
 			expectedWorkflows: map[string]error{
-				"provision_device":        nil,
 				"update_device_inventory": nil,
 			},
 		},
@@ -1383,8 +1381,9 @@ func TestDevAuthAcceptDevice(t *testing.T) {
 			}
 
 			devauth := NewDevAuth(&db, nil, nil, nil, Config{})
-			err := devauth.AcceptDeviceAuth(
-				context.Background(), dummyDevID, dummyAuthID)
+			_, _, err := devauth.SetAuthSetStatus(
+				context.Background(), dummyDevID, dummyAuthID, model.DevStatusAccepted,
+			)
 
 			if tc.outErr != "" {
 				assert.EqualError(t, err, tc.outErr)
@@ -1541,8 +1540,8 @@ func TestDevAuthRejectDevice(t *testing.T) {
 				c.AssertNotCalled(t, "DeleteToken")
 			}
 
-			err := devauth.RejectDeviceAuth(
-				ctx, dummyDevID, dummyAuthID,
+			_, _, err := devauth.SetAuthSetStatus(
+				ctx, dummyDevID, dummyAuthID, model.DevStatusRejected,
 			)
 
 			if tc.outErr != "" {
@@ -1732,7 +1731,11 @@ func TestDevAuthResetDevice(t *testing.T) {
 					model.AuthSetUpdate{Status: model.DevStatusPending}).Return(nil)
 				db.On("GetDeviceById", context.Background(),
 					mock.AnythingOfType("string")).
-					Return(&model.Device{Id: tc.aset.DeviceId, Status: tc.aset.Status}, nil)
+					Return(&model.Device{
+						Id:          tc.aset.DeviceId,
+						Status:      tc.aset.Status,
+						Provisioned: true,
+					}, nil)
 			}
 			db.On("DeleteTokenByDevId", context.Background(),
 				dummyDevUUID).Return(
@@ -1766,8 +1769,8 @@ func TestDevAuthResetDevice(t *testing.T) {
 			}
 
 			devauth := NewDevAuth(&db, co, nil, nil, Config{})
-			err := devauth.ResetDeviceAuth(
-				context.Background(), dummyDevID, dummyAuthID,
+			_, _, err := devauth.SetAuthSetStatus(
+				context.Background(), dummyDevID, dummyAuthID, model.DevStatusPending,
 			)
 
 			if tc.dbErr != nil ||
@@ -3161,7 +3164,10 @@ func TestDevAuthDeleteAuthSet(t *testing.T) {
 				uint(0),
 				mock.AnythingOfType("model.DeviceUpdate")).Return(tc.dbUpdateDeviceErr)
 			db.On("GetDeviceById", ctx,
-				mock.AnythingOfType("string")).Return(&model.Device{Id: tc.devId}, nil)
+				mock.AnythingOfType("string")).Return(&model.Device{
+				Id:          tc.devId,
+				Provisioned: true,
+			}, nil)
 			db.On("GetAuthSetsForDevice",
 				ctx,
 				tc.devId,
