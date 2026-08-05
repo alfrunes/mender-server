@@ -1381,7 +1381,7 @@ func TestDevAuthAcceptDevice(t *testing.T) {
 			}
 
 			devauth := NewDevAuth(&db, nil, nil, nil, Config{})
-			_, _, err := devauth.SetAuthSetStatus(
+			err := devauth.SetAuthSetStatus(
 				context.Background(), dummyDevID, dummyAuthID, model.DevStatusAccepted,
 			)
 
@@ -1540,7 +1540,7 @@ func TestDevAuthRejectDevice(t *testing.T) {
 				c.AssertNotCalled(t, "DeleteToken")
 			}
 
-			_, _, err := devauth.SetAuthSetStatus(
+			err := devauth.SetAuthSetStatus(
 				ctx, dummyDevID, dummyAuthID, model.DevStatusRejected,
 			)
 
@@ -1769,7 +1769,7 @@ func TestDevAuthResetDevice(t *testing.T) {
 			}
 
 			devauth := NewDevAuth(&db, co, nil, nil, Config{})
-			_, _, err := devauth.SetAuthSetStatus(
+			err := devauth.SetAuthSetStatus(
 				context.Background(), dummyDevID, dummyAuthID, model.DevStatusPending,
 			)
 
