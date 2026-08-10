@@ -1,4 +1,23 @@
 ARG REGISTRY=docker.io
+
+FROM ${REGISTRY}/library/golang:1.26.5 as integration-ng
+
+RUN \
+  install -m 0755 -d /etc/apt/keyrings && \
+  curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc && \
+  chmod a+r /etc/apt/keyrings/docker.asc \
+  cat  <<EOF | tee /etc/apt/sources.list.d/docker.sources
+Types: deb
+URIs: https://download.docker.com/linux/debian
+Suites: $(. /etc/os-release && echo "$VERSION_CODENAME")
+Components: stable
+Signed-By: /etc/apt/keyrings/docker.asc
+EOF
+
+RUN \
+  apt-get update -q && \
+  apt-get install --assume-yes docker-ce docker-ce-cli containerd.io docker-compose-plugin
+
 FROM ${REGISTRY}/library/python:3.14-trixie
 WORKDIR /tests
 
@@ -39,14 +58,6 @@ RUN \
 COPY requirements-integration.txt .
 RUN pip3 install --no-cache-dir -r requirements-integration.txt && \
   apt-get install --assume-yes libzbar0
-
-ENV GO_VERSION=1.24.0
-
-RUN curl -L "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" | tar -C /usr/local -xz
-ENV PATH="${PATH}:/usr/local/go/bin"
-ENV GOPATH=/go
-ENV PATH=$PATH:$GOPATH/bin
-RUN go version
 
 LABEL last_refreshed="2026-03-30"
 

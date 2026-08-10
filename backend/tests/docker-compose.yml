@@ -53,9 +53,6 @@ services:
         - ${MENDER_SERVER_PATH:-../../}/backend/tests/integration/docs:/docs
         - ${MENDER_SERVER_PATH:-../../}/backend/tests:/tests
         - ${MENDER_SERVER_PATH:-../../}/backend:/backend
-        - go_pkg_mod:/go/pkg/mod/
-        - go_build_cache:/root/.cache/go-build
-        - go_tmp_cache:/tmp
         - /var/run/docker.sock:/var/run/docker.sock
     environment:
         GOMODCACHE: /go/pkg/mod
@@ -79,6 +76,18 @@ services:
         GMAIL_PASSWORD: ${GMAIL_PASSWORD:-}
         K8S: ${K8S:-}
         PYTEST_ADDOPTS: "${PYTEST_ADDOPTS:-}"
+
+  integration-tester-ng:
+    extends:
+      service: integration-tester
+    build:
+      target: integration-ng
+    environment: !override
+      GOMODCACHE: /go/pkg/mod
+    volumes:
+      - go_pkg_mod:/go/pkg/mod/
+      - go_build_cache:/root/.cache/go-build
+      - go_tmp_cache:/tmp
 
 volumes:
   go_pkg_mod:
