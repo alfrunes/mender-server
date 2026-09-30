@@ -2,26 +2,25 @@ ARG REGISTRY=docker.io
 FROM ${REGISTRY}/library/python:3.14-trixie
 WORKDIR /tests
 
-# Install mender-artifact
-RUN \
-  apt-get update && \
-  apt-get install --assume-yes \
+# Install Debian build dependencies
+RUN apt-get update -q && \
+  apt-get install --assume-yes --no-install-recommends \
   apt-transport-https \
   ca-certificates \
-  gnupg && \
-  curl -fsSL https://downloads.mender.io/repos/debian/gpg | tee /etc/apt/trusted.gpg.d/mender.asc | \
-  gpg --show-keys --with-fingerprint && \
-  echo "deb [arch=$(dpkg --print-architecture)] https://downloads.mender.io/repos/workstation-tools debian/trixie/stable main" | \
-  tee /etc/apt/sources.list.d/mender.list && \
-  apt-get update && \
-  apt-get install --assume-yes mender-artifact
+  gnupg
 
-# Install docker
-RUN \
-  install -m 0755 -d /etc/apt/keyrings && \
-  curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc && \
+# Install Debian packages
+RUN <<NUR
+  set -euxo pipefail
+  # Configure mender-artifact repo
+  curl -fsSL https://downloads.mender.io/repos/debian/gpg | tee /etc/apt/trusted.gpg.d/mender.asc | \
+  gpg --show-keys --with-fingerprint
+  echo "deb [arch=$(dpkg --print-architecture)] https://downloads.mender.io/repos/workstation-tools debian/trixie/stable main" | \
+  tee /etc/apt/sources.list.d/mender.list
+  # Configure docker repo
+  install -m 0755 -d /etc/apt/keyrings
+  curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
   chmod a+r /etc/apt/keyrings/docker.asc
-RUN . /etc/os-release && \
   cat > /etc/apt/sources.list.d/docker.sources <<EOF
 Types: deb
 URIs: https://download.docker.com/linux/debian
@@ -29,16 +28,20 @@ Suites: $(. /etc/os-release && echo "$VERSION_CODENAME")
 Components: stable
 Signed-By: /etc/apt/keyrings/docker.asc
 EOF
-
-RUN \
-  apt-get update -q && \
-  apt-get install --assume-yes docker-ce docker-ce-cli containerd.io docker-compose-plugin
+  apt-get update -q
+  apt-get install --assume-yes --no-install-recommends \
+    containerd.io \
+    docker-ce \
+    docker-ce-cli \
+    docker-compose-plugin \
+    libzbar0 \
+    mender-artifact
+NUR
 
 # Install python dependencies
 COPY requirements-integration.txt .
-RUN pip3 install --no-cache-dir -r requirements-integration.txt && \
-  apt-get install --assume-yes libzbar0
+RUN pip3 install --no-cache-dir -r requirements-integration.txt
 
-LABEL last_refreshed="2026-09-28"
+LABEL last_refreshed="2026-09-30"
 
 ENTRYPOINT ["python3", "-m", "pytest"]
