@@ -7,9 +7,9 @@ import (
 )
 
 var (
-	groupNameRegex = regexp.MustCompile("^[A-Za-z0-9_-]*$")
+	groupNameRegex = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
 	deviceGroupPattern = validation.Match(groupNameRegex).Error(
 		"group name can only contain: upper/lowercase " +
-			"alphanum, -(dash), _(underscore)")
+			"alphanum, -(dash), _(underscore), .(period)")
 )
